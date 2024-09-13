@@ -1,0 +1,31 @@
+{
+    "drills": [
+      {
+        "number": 5,
+        "name": "0.3mm Drill",
+        "type": "drill",
+        "diameter": 0.3,
+        "max_depth": 5,
+        "depth_offset": 0.18,
+        "plunge_rate": 70,
+        "retract_rate": 300,
+        "spindle_speed": 18000
+      }
+    ],
+    "mills": [
+      {
+        "number": 10,
+        "name": "0.8mm End Mill",
+        "type": "end mill",
+        "diameter": 0.8,
+        "material": "carbide",
+        "flutes": 2,
+        "length": 38,
+        "shank": 3.175,
+        "feed_rate": 300,
+        "plunge_rate": 100,
+        "spindle_speed": 18000,
+        "depth_offset": 0.1
+      }
+    ]
+}
