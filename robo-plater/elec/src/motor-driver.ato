@@ -2,6 +2,7 @@ from "generics/capacitors.ato" import Capacitor
 from "generics/resistors.ato" import Resistor
 from "generics/interfaces.ato" import Power
 from "generics/filters.ato" import LowPassFilter
+from "generics/vdivs.ato" import VDiv
 
 
 component DRV8220DSGR:
@@ -43,19 +44,28 @@ component LM324DT:
     signal OUT4 ~ pin 14
 
 
-component YTC_PH_2AWB:
-    """Seems to be a 2-pin JST PH series knock off"""
-    footprint = "CONN-SMD_PH-2AWB"
-    lcsc_id = "C18221575"
-    mpn = "C18221575"
-    # pins
-    signal red ~ pin 1
-    signal black ~ pin 2
+component JST_PH_2P:
+    signal black ~ pin 1
+    signal red ~ pin 2
+    mpn = "C295747"
+    footprint = "CONN-SMD_P2.00_S2B-PH-SM4-TB-LF-SN"
 
 
 component Decoupler from Capacitor:
     value = 1uF to 10uF
     package = "0805"
+
+
+component NetTie_250u:
+    pin 1
+    pin 2
+    footprint = "NetTie-2_SMD_Pad0.25mm"
+    mpn = "NetTie_250u"
+
+
+component SoftPuller from Resistor:
+    value = 1MΩ +/- 10%
+    package = "0402"
 
 
 module MotorDriver:
@@ -79,8 +89,9 @@ module MotorDriver:
     decoupler4 = new Decoupler
     power_3v3.vcc ~ decoupler4.1; decoupler4.2 ~ gnd
 
-    # the feedback is a digital pulse train used to detect movement
-    signal feedback
+    # output feedback signals
+    signal pulses  # digital pulse train used to detect movement
+    signal current  # analog 0V to 3.3V proportional to the current through the motor
 
     # input signals to control the direction and speed of the motor
     signal dir
@@ -95,17 +106,19 @@ module MotorDriver:
     power_3v3.vcc ~ driver.nSLEEP
 
     # the motor is a YTC_PH_2AWB
-    motor_out = new YTC_PH_2AWB
-    driver.OUT1 ~ motor_out.red
-    driver.OUT2 ~ motor_out.black
+    motor_out = new JST_PH_2P
+    driver.OUT1 ~ motor_out.black
+    driver.OUT2 ~ motor_out.red
 
     # feedback circuit ---------------
     # via shunt
     shunt = new Resistor
-    shunt.value = 1Ω
+    shunt.value = 1Ω +/- 10%
     shunt.package = "0805"
     driver.GND ~ shunt.1; shunt.2 ~ gnd
     signal _shunt_high ~ shunt.1
+    _shunt_nettie = new NetTie_250u
+    signal _shunt_gnd ~ _shunt_nettie.1; _shunt_nettie.2 ~ shunt.2
 
     # TODO: there's a lot more we could theoretically
     # do with this, because it's actually a 4ch op-amp
@@ -113,21 +126,38 @@ module MotorDriver:
     op_amp = new LM324DT
     power_3v3.vcc ~ op_amp.VCC; op_amp.GND ~ gnd
 
-    ## ch1 is for pulse train feedback
-    op_amp.OUT1 ~ feedback
-
+    ## ch1 is for current feedback and amplification
+    op_amp.OUT1 ~ current
     # the high cut-off filters the signal that makes it to the
     # positive leg of the op-amp, eg, the signal that makes it through
     # it's to remove high-frequency noise like the PWM carrier
     high_cut_off = new LowPassFilter
-    _shunt_high ~ high_cut_off.input.io; high_cut_off.output.io ~ op_amp.IN1_plus
-    gnd ~ high_cut_off.input.gnd
     high_cut_off.cutoff_frequency = 1kHz to 1.4kHz
+    _shunt_high ~ high_cut_off.input.io; high_cut_off.output.io ~ op_amp.IN1_plus
+    high_cut_off.input.gnd ~ _shunt_gnd
 
+    amp_vdiv = new VDiv
+    # rail voltage from the op-amp
+    # no tolerance because in this case we'd de-constrain the resistors
+    amp_vdiv.v_in = 3.3V
+    amp_vdiv.v_out = 300mA * shunt.value  # the max voltage across the shunt resistor
+    current ~ amp_vdiv.top; amp_vdiv.out ~ op_amp.IN1_minus
+    amp_vdiv.bottom ~ _shunt_gnd
+
+    ## ch2 is for pulse train feedback
+    op_amp.OUT2 ~ pulses
     # the low cut-off filter is primarily to find the mid-point/average
     # of the pulse train, so we have something to trigger off
     low_cut_off = new LowPassFilter
-    _shunt_high ~ low_cut_off.input.io; low_cut_off.output.io ~ op_amp.IN1_minus
+    current ~ low_cut_off.input.io; low_cut_off.output.io ~ op_amp.IN2_minus
     gnd ~ low_cut_off.input.gnd
     low_cut_off.cutoff_frequency = 150Hz +/- 15%
     low_cut_off.capacitor.value = 1uF +/- 10%
+
+    # We need to add another two resistors to stablilise the output in steady state
+    # If we don't have these resistors, it's random and highly sensitive, so likley to jump around
+    pullup = new SoftPuller
+    op_amp.IN2_plus ~ pullup.1; pullup.2 ~ power_3v3.vcc
+
+    pulldown = new SoftPuller
+    op_amp.IN2_minus ~ pulldown.1; pulldown.2 ~ gnd

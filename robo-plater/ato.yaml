@@ -9,3 +9,11 @@ dependencies:
   version_spec: '@09ad6baeaab93d53b9b6c90069ac750f4161d76f'
   link_broken: true
   path: elec/src/generics
+- name: esp32-s3
+  version_spec: '@775b03e7566001d5724b98a5c5d952a887bb550c'
+  link_broken: false
+  path: .ato/modules/esp32-s3
+- name: lv2842xlvddcr
+  version_spec: '@63615f935a2727e9b8d55e61e7fb02d444641778'
+  link_broken: false
+  path: .ato/modules/lv2842xlvddcr

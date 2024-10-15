@@ -1,5 +1,20 @@
 from "motor-driver.ato" import MotorDriver
+from "esp32-s3/elec/src/base.ato" import Base
+from "lv2842xlvddcr/lv2842kit.ato" import LV2842Kit
+from "generics/power.ato" import Power
 
 
 module RoboPlater:
+    power_12v = new Power
+    power_3v3 = new Power
+    uc = new Base
+
     ch1 = new MotorDriver
+    power_12v ~ ch1.power_12v
+    power_3v3 ~ ch1.power_3v3
+    ch1.pulses ~ uc.uc.io4
+    ch1.current ~ uc.uc.io5
+    uc.uc.io15 ~ ch1.dir
+    uc.uc.io16 ~ ch1.pwm
+
+    a=0
