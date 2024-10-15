@@ -14,6 +14,14 @@ dependencies:
   link_broken: false
   path: .ato/modules/esp32-s3
 - name: lv2842xlvddcr
-  version_spec: '@63615f935a2727e9b8d55e61e7fb02d444641778'
+  version_spec:
   link_broken: false
   path: .ato/modules/lv2842xlvddcr
+- name: saleae-header
+  version_spec: '@c2893ddaad84cd03553cd29747d3bb9e0655ef20'
+  link_broken: false
+  path: .ato/modules/saleae-header
+- name: tca9548apwr
+  version_spec: '@203e282316f071778bfa9405f102b97910dfbceb'
+  link_broken: false
+  path: .ato/modules/tca9548apwr

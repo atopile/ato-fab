@@ -1,7 +1,8 @@
 from "motor-driver.ato" import MotorDriver
 from "esp32-s3/elec/src/base.ato" import Base
 from "lv2842xlvddcr/lv2842kit.ato" import LV2842Kit
-from "generics/power.ato" import Power
+from "generics/interfaces.ato" import Power
+from "saleae-header/saleae-header.ato" import SaleaeHeader
 
 
 module RoboPlater:
@@ -9,6 +10,9 @@ module RoboPlater:
     power_3v3 = new Power
     uc = new Base
 
+    # for the first two channels, we'll throw the whole kit and kaboodle
+    # at them, so we can debug things like the pulse train feedback
+    # without having to re-wire the board
     ch1 = new MotorDriver
     power_12v ~ ch1.power_12v
     power_3v3 ~ ch1.power_3v3
@@ -16,5 +20,35 @@ module RoboPlater:
     ch1.current ~ uc.uc.io5
     uc.uc.io15 ~ ch1.dir
     uc.uc.io16 ~ ch1.pwm
+    # debug header for ch1
+    ch1_debug = new SaleaeHeader
+    ch1_debug.gnd ~ power_3v3.gnd
+    ch1_debug.ch3.io ~ ch1.pulses
+    ch1_debug.ch2.io ~ ch1.current
+    ch1_debug.ch1.io ~ ch1.pwm
+    ch1_debug.ch0.io ~ ch1.dir
+    ch1.pulses.override_net_name = "ch1.pulses"
+    ch1.current.override_net_name = "ch1.current"
+    ch1.dir.override_net_name = "ch1.dir"
+    ch1.pwm.override_net_name = "ch1.pwm"
+
+    ch2 = new MotorDriver
+    power_12v ~ ch2.power_12v
+    power_3v3 ~ ch2.power_3v3
+    ch2.pulses ~ uc.uc.io17
+    ch2.current ~ uc.uc.io18
+    uc.uc.io8 ~ ch2.dir
+    uc.uc.io3 ~ ch2.pwm
+    # debug header for ch2
+    ch2_debug = new SaleaeHeader
+    ch2_debug.gnd ~ power_3v3.gnd
+    ch2_debug.ch3.io ~ ch2.pulses
+    ch2_debug.ch2.io ~ ch2.current
+    ch2_debug.ch1.io ~ ch2.pwm
+    ch2_debug.ch0.io ~ ch2.dir
+    ch2.pulses.override_net_name = "ch2.pulses"
+    ch2.current.override_net_name = "ch2.current"
+    ch2.dir.override_net_name = "ch2.dir"
+    ch2.pwm.override_net_name = "ch2.pwm"
 
     a=0
