@@ -1,0 +1,133 @@
+from "generics/capacitors.ato" import Capacitor
+from "generics/resistors.ato" import Resistor
+from "generics/interfaces.ato" import Power
+from "generics/filters.ato" import LowPassFilter
+
+
+component DRV8220DSGR:
+    # component DRV8220DSGR_C3681269
+    footprint = "WSON-8_L2.0-W2.0-P0.50-TL-EP"
+    lcsc_id = "C3681269"
+    mpn = "C3681269"
+    # pins
+    signal VM ~ pin 1
+    signal OUT1 ~ pin 2
+    signal OUT2 ~ pin 3
+    signal GND ~ pin 4
+    signal IN2_EN ~ pin 5
+    signal IN1_PH ~ pin 6
+    signal MODE ~ pin 7
+    signal nSLEEP ~ pin 8
+    signal EP ~ pin 9
+
+
+component LM324DT:
+    # component LM324DT
+    footprint = "SOIC-14_L8.7-W3.9-P1.27-LS6.0-BL"
+    lcsc_id = "C71035"
+    mpn = "C71035"
+    # pins
+    signal OUT1 ~ pin 1
+    signal IN1_minus ~ pin 2
+    signal IN1_plus ~ pin 3
+    signal VCC ~ pin 4
+    signal IN2_plus ~ pin 5
+    signal IN2_minus ~ pin 6
+    signal OUT2 ~ pin 7
+    signal OUT3 ~ pin 8
+    signal IN3_minus ~ pin 9
+    signal IN3_plus ~ pin 10
+    signal GND ~ pin 11
+    signal IN4_plus ~ pin 12
+    signal IN4_minus ~ pin 13
+    signal OUT4 ~ pin 14
+
+
+component YTC_PH_2AWB:
+    """Seems to be a 2-pin JST PH series knock off"""
+    footprint = "CONN-SMD_PH-2AWB"
+    lcsc_id = "C18221575"
+    mpn = "C18221575"
+    # pins
+    signal red ~ pin 1
+    signal black ~ pin 2
+
+
+component Decoupler from Capacitor:
+    value = 1uF to 10uF
+    package = "0805"
+
+
+module MotorDriver:
+    """
+    Control and feedback for a single DC brushed motor.
+    We use the ripple in the current from commutation to detect shaft movement in the motor.
+    """
+    signal gnd
+
+    power_12v = new Power
+    power_12v.gnd ~ gnd
+    decoupler1 = new Decoupler
+    power_12v.vcc ~ decoupler1.1; decoupler1.2 ~ gnd
+    decoupler2 = new Decoupler
+    power_12v.vcc ~ decoupler2.1; decoupler2.2 ~ gnd
+    decoupler3 = new Decoupler
+    power_12v.vcc ~ decoupler3.1; decoupler3.2 ~ gnd
+
+    power_3v3 = new Power
+    power_3v3.gnd ~ gnd
+    decoupler4 = new Decoupler
+    power_3v3.vcc ~ decoupler4.1; decoupler4.2 ~ gnd
+
+    # the feedback is a digital pulse train used to detect movement
+    signal feedback
+
+    # input signals to control the direction and speed of the motor
+    signal dir
+    signal pwm
+
+    ## motor driver ---------------
+    driver = new DRV8220DSGR
+    power_12v.vcc ~ driver.VM
+    pwm ~ driver.IN2_EN
+    dir ~ driver.IN1_PH
+    power_3v3.vcc ~ driver.MODE
+    power_3v3.vcc ~ driver.nSLEEP
+
+    # the motor is a YTC_PH_2AWB
+    motor_out = new YTC_PH_2AWB
+    driver.OUT1 ~ motor_out.red
+    driver.OUT2 ~ motor_out.black
+
+    # feedback circuit ---------------
+    # via shunt
+    shunt = new Resistor
+    shunt.value = 1Ω
+    shunt.package = "0805"
+    driver.GND ~ shunt.1; shunt.2 ~ gnd
+    signal _shunt_high ~ shunt.1
+
+    # TODO: there's a lot more we could theoretically
+    # do with this, because it's actually a 4ch op-amp
+    # but I haven't thought of anything actually useful yet
+    op_amp = new LM324DT
+    power_3v3.vcc ~ op_amp.VCC; op_amp.GND ~ gnd
+
+    ## ch1 is for pulse train feedback
+    op_amp.OUT1 ~ feedback
+
+    # the high cut-off filters the signal that makes it to the
+    # positive leg of the op-amp, eg, the signal that makes it through
+    # it's to remove high-frequency noise like the PWM carrier
+    high_cut_off = new LowPassFilter
+    _shunt_high ~ high_cut_off.input.io; high_cut_off.output.io ~ op_amp.IN1_plus
+    gnd ~ high_cut_off.input.gnd
+    high_cut_off.cutoff_frequency = 1kHz to 1.4kHz
+
+    # the low cut-off filter is primarily to find the mid-point/average
+    # of the pulse train, so we have something to trigger off
+    low_cut_off = new LowPassFilter
+    _shunt_high ~ low_cut_off.input.io; low_cut_off.output.io ~ op_amp.IN1_minus
+    gnd ~ low_cut_off.input.gnd
+    low_cut_off.cutoff_frequency = 150Hz +/- 15%
+    low_cut_off.capacitor.value = 1uF +/- 10%
