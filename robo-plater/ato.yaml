@@ -25,3 +25,7 @@ dependencies:
   version_spec: '@203e282316f071778bfa9405f102b97910dfbceb'
   link_broken: false
   path: .ato/modules/tca9548apwr
+- name: xt-connectors
+  version_spec:
+  link_broken: false
+  path: .ato/modules/xt-connectors
