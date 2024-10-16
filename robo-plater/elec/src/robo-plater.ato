@@ -1,4 +1,5 @@
 from "motor-driver.ato" import MotorDriver
+from "io-expander.ato" import IOExpander
 from "esp32-s3/elec/src/base.ato" import Base
 from "lv2842xlvddcr/lv2842kit.ato" import LV2842Kit
 from "generics/interfaces.ato" import Power
@@ -6,12 +7,18 @@ from "saleae-header/saleae-header.ato" import SaleaeHeader
 from "lv2842xlvddcr/lv2842kit.ato" import LV2842Kit
 from "xt-connectors/xt-connectors.ato" import XT30_Male_Right_Angle
 
-
 module RoboPlater:
     power_12v = new Power
     power_3v3 = new Power
-    uc = new Base
 
+    # control ------------------
+    uc = new Base
+    uc.power_3v3 ~ power_3v3
+    io_expander = new IOExpander
+    power_3v3 ~ io_expander.power
+    uc.uc.i2c ~ io_expander.i2c
+
+    # motor drivers ------------------
     # for the first two channels, we'll throw the whole kit and kaboodle
     # at them, so we can debug things like the pulse train feedback
     # without having to re-wire the board
@@ -52,6 +59,48 @@ module RoboPlater:
     ch2.current.override_net_name = "ch2.current"
     ch2.dir.override_net_name = "ch2.dir"
     ch2.pwm.override_net_name = "ch2.pwm"
+
+    # ch3-6 are boring, so no current feedback or debug headers for them
+    ch3 = new MotorDriver
+    power_12v ~ ch3.power_12v
+    power_3v3 ~ ch3.power_3v3
+    ch3.pulses ~ uc.uc.io46
+    io_expander.io_a_0 ~ ch3.dir
+    uc.uc.io14 ~ ch3.pwm
+    ch3.pulses.override_net_name = "ch3.pulses"
+    ch3.dir.override_net_name = "ch3.dir"
+    ch3.pwm.override_net_name = "ch3.pwm"
+
+    ch4 = new MotorDriver
+    power_12v ~ ch4.power_12v
+    power_3v3 ~ ch4.power_3v3
+    ch4.pulses ~ uc.uc.io21
+    io_expander.io_a_1 ~ ch4.dir
+    uc.uc.io48 ~ ch4.pwm
+    ch4.pulses.override_net_name = "ch4.pulses"
+    ch4.dir.override_net_name = "ch4.dir"
+    ch4.pwm.override_net_name = "ch4.pwm"
+
+    ch5 = new MotorDriver
+    power_12v ~ ch5.power_12v
+    power_3v3 ~ ch5.power_3v3
+    ch5.pulses ~ uc.uc.io45
+    io_expander.io_a_2 ~ ch5.dir
+    uc.uc.io35 ~ ch5.pwm
+    ch5.pulses.override_net_name = "ch5.pulses"
+    ch5.dir.override_net_name = "ch5.dir"
+    ch5.pwm.override_net_name = "ch5.pwm"
+
+    ch6 = new MotorDriver
+    power_12v ~ ch6.power_12v
+    power_3v3 ~ ch6.power_3v3
+    ch6.pulses ~ uc.uc.io36
+    io_expander.io_a_3 ~ ch6.dir
+    uc.uc.io38 ~ ch6.pwm
+    ch6.pulses.override_net_name = "ch6.pulses"
+    ch6.dir.override_net_name = "ch6.dir"
+    ch6.pwm.override_net_name = "ch6.pwm"
+
 
     # power supply ------------------
     power_connector = new XT30_Male_Right_Angle

@@ -1,0 +1,120 @@
+from "generics/interfaces.ato" import Power, I2C
+from "generics/capacitors.ato" import Capacitor
+from "generics/resistors.ato" import Resistor
+
+
+module IOExpander:
+    power = new Power
+    i2c = new I2C
+
+    a0_pull = new TwoWayPull
+    a1_pull = new TwoWayPull
+    a2_pull = new TwoWayPull
+
+    power ~ a0_pull.power
+    power ~ a1_pull.power
+    power ~ a2_pull.power
+
+    ic = new MCP23017T_E_ML
+    decoupler = new Capacitor
+    decoupler.value = 80nF to 1.2uF
+    decoupler.package = "0402"
+    power ~ decoupler.power
+    power.vcc ~ ic.VDD; ic.VSS ~ power.gnd
+    i2c.sda ~ ic.SDA
+    i2c.scl ~ ic.SCK
+    i2c.gnd ~ power.gnd
+
+    a0_pull.center ~ ic.A0
+    a1_pull.center ~ ic.A1
+    a2_pull.center ~ ic.A2
+
+    signal io_a_0 ~ ic.GPA0
+    signal io_a_1 ~ ic.GPA1
+    signal io_a_2 ~ ic.GPA2
+    signal io_a_3 ~ ic.GPA3
+    signal io_a_4 ~ ic.GPA4
+    signal io_a_5 ~ ic.GPA5
+    signal io_a_6 ~ ic.GPA6
+    signal io_a_7 ~ ic.GPA7
+
+    signal io_b_0 ~ ic.GPB0
+    signal io_b_1 ~ ic.GPB1
+    signal io_b_2 ~ ic.GPB2
+    signal io_b_3 ~ ic.GPB3
+    signal io_b_4 ~ ic.GPB4
+    signal io_b_5 ~ ic.GPB5
+    signal io_b_6 ~ ic.GPB6
+    signal io_b_7 ~ ic.GPB7
+
+    signal reset ~ ic.RESET_active_low
+    _reset_pullup = new Resistor
+    _reset_pullup.value = 10kΩ +/- 10%
+    _reset_pullup.package = "0402"
+    power.vcc ~ _reset_pullup.1; _reset_pullup.2 ~ reset
+
+    signal int_a ~ ic.INTA
+    _inta_pulldown = new Resistor
+    _inta_pulldown.value = 10kΩ +/- 10%
+    _inta_pulldown.package = "0402"
+    power.vcc ~ _inta_pulldown.1; _inta_pulldown.2 ~ int_a
+
+    signal int_b ~ ic.INTB
+    _intb_pulldown = new Resistor
+    _intb_pulldown.value = 10kΩ +/- 10%
+    _intb_pulldown.package = "0402"
+    power.vcc ~ _intb_pulldown.1; _intb_pulldown.2 ~ int_b
+
+
+component MCP23017T_E_ML:
+    # component MCP23017T_minus_E_slash_ML
+    footprint = "QFN-28_L6.0-W6.0-P0.65-BL-EP3.7"
+    lcsc_id = "C629439"
+    mpn = "C629439"
+    # pins
+    signal EP ~ pin 29
+    signal GPB3 ~ pin 28
+    signal GPB2 ~ pin 27
+    signal GPB1 ~ pin 26
+    signal GPB0 ~ pin 25
+    signal GPA7 ~ pin 24
+    signal GPA6 ~ pin 23
+    signal GPA5 ~ pin 22
+    signal GPA4 ~ pin 21
+    signal GPA3 ~ pin 20
+    signal GPA2 ~ pin 19
+    signal GPA1 ~ pin 18
+    signal GPA0 ~ pin 17
+    signal INTA ~ pin 16
+    signal INTB ~ pin 15
+    signal RESET_active_low ~ pin 14
+    signal A2 ~ pin 13
+    signal A1 ~ pin 12
+    signal A0 ~ pin 11
+    signal NC ~ pin 10
+    signal SDA ~ pin 9
+    signal SCK ~ pin 8
+    NC ~ pin 7
+    signal VSS ~ pin 6
+    signal VDD ~ pin 5
+    signal GPB7 ~ pin 4
+    signal GPB6 ~ pin 3
+    signal GPB5 ~ pin 2
+    signal GPB4 ~ pin 1
+
+
+module TwoWayPull:
+    power = new Power
+    signal center
+    package = "0402"
+    strength = 10kΩ +/- 10%
+
+    up = new Resistor
+    up.do_not_populate = True
+    down = new Resistor
+    up.value = strength
+    down.value = strength
+    up.package = package
+    down.package = package
+
+    power.vcc ~ up.1; up.2 ~ center; center ~ down.1; down.2 ~ power.gnd
