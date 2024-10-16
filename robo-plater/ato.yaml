@@ -7,8 +7,8 @@ builds:
 dependencies:
 - name: generics
   version_spec: '@09ad6baeaab93d53b9b6c90069ac750f4161d76f'
-  link_broken: true
-  path: elec/src/generics
+  link_broken: false
+  path: .ato/modules/generics
 - name: esp32-s3
   version_spec: '@775b03e7566001d5724b98a5c5d952a887bb550c'
   link_broken: false
