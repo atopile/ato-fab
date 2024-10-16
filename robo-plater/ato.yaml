@@ -6,6 +6,8 @@ builds:
     entry: elec/src/motor-driver.ato:MotorDriver
   io-expander:
     entry: elec/src/io-expander.ato:IOExpander
+  channel:
+    entry: elec/src/robo-plater.ato:Channel
 dependencies:
 - name: generics
   version_spec: '@09ad6baeaab93d53b9b6c90069ac750f4161d76f'
@@ -24,10 +26,18 @@ dependencies:
   link_broken: false
   path: .ato/modules/saleae-header
 - name: tca9548apwr
-  version_spec: '@203e282316f071778bfa9405f102b97910dfbceb'
+  version_spec:
   link_broken: false
   path: .ato/modules/tca9548apwr
 - name: xt-connectors
   version_spec:
   link_broken: false
   path: .ato/modules/xt-connectors
+- name: qwiic-connectors
+  version_spec:
+  link_broken: false
+  path: .ato/modules/qwiic-connectors
+- name: sk6805-ec20
+  version_spec:
+  link_broken: false
+  path: .ato/modules/sk6805-ec20
