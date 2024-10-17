@@ -41,3 +41,7 @@ dependencies:
   version_spec:
   link_broken: false
   path: .ato/modules/sk6805-ec20
+- name: nau7802
+  version_spec: '@62f6a4c6bbca2d423eabed6fb5319fcd8ff55f7c'
+  link_broken: false
+  path: .ato/modules/nau7802

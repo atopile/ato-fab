@@ -63,6 +63,11 @@ component NetTie_250u:
     mpn = "NetTie_250u"
 
 
+component HardPuller from Resistor:
+    value = 10kΩ +/- 10%
+    package = "0402"
+
+
 component SoftPuller from Resistor:
     value = 1MΩ +/- 10%
     package = "0402"
@@ -96,6 +101,7 @@ module MotorDriver:
     # input signals to control the direction and speed of the motor
     signal dir
     signal pwm
+    signal enable
 
     ## motor driver ---------------
     driver = new DRV8220DSGR
@@ -103,7 +109,9 @@ module MotorDriver:
     pwm ~ driver.IN2_EN
     dir ~ driver.IN1_PH
     power_3v3.vcc ~ driver.MODE
-    power_3v3.vcc ~ driver.nSLEEP
+    enable_pullup = new HardPuller
+    enable ~ driver.nSLEEP
+    enable ~ enable_pullup.1; enable_pullup.2 ~ power_3v3.vcc
 
     # the motor is a YTC_PH_2AWB
     motor_out = new JST_PH_2P
