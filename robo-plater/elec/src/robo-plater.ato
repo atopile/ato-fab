@@ -69,37 +69,42 @@ module RoboPlater:
     ch5 = new Channel
     ch6 = new Channel
 
-    uc.uc.io4 ~ ch1.pulses
-    uc.uc.io5 ~ ch1.current
-    uc.uc.io15 ~ ch1.dir
-    uc.uc.io16 ~ ch1.pwm
+    # free
+    # io4
+    # io5
+    # io16
+    # io15
+
+    uc.uc.io9 ~ ch1.pulses
+    uc.uc.io46 ~ ch1.current
+    uc.uc.io8 ~ ch1.dir
+    uc.uc.io3 ~ ch1.pwm
     i2c_mux.i2c0 ~ ch1.i2c
 
-    uc.uc.io17 ~ ch2.pulses
-    uc.uc.io18 ~ ch2.current
-    uc.uc.io8 ~ ch2.dir
-    uc.uc.io3 ~ ch2.pwm
-    i2c_mux.i2c1 ~ ch2.i2c
+    uc.uc.io18 ~ ch2.pulses
+    uc.uc.io17 ~ ch2.dir
+    uc.uc.io16 ~ ch2.pwm
+    i2c_mux.i2c7 ~ ch2.i2c
 
-    uc.uc.io46 ~ ch3.pulses
+    uc.uc.ic.TXD0  ~ ch3.pulses
     io_expander.io_a_0 ~ ch3.dir
     uc.uc.io14 ~ ch3.pwm
-    i2c_mux.i2c2 ~ ch3.i2c
+    i2c_mux.i2c6 ~ ch3.i2c
 
     uc.uc.io21 ~ ch4.pulses
     io_expander.io_a_1 ~ ch4.dir
     uc.uc.io48 ~ ch4.pwm
-    i2c_mux.i2c3 ~ ch4.i2c
+    i2c_mux.i2c4 ~ ch4.i2c
 
     uc.uc.io45 ~ ch5.pulses
     io_expander.io_a_2 ~ ch5.dir
     uc.uc.io35 ~ ch5.pwm
-    i2c_mux.i2c4 ~ ch5.i2c
+    i2c_mux.i2c5 ~ ch5.i2c
 
     uc.uc.io36 ~ ch6.pulses
     io_expander.io_a_3 ~ ch6.dir
     uc.uc.io38 ~ ch6.pwm
-    i2c_mux.i2c5 ~ ch6.i2c
+    i2c_mux.i2c3 ~ ch6.i2c
 
     # chain led connections
     uc.led_dout ~ ch1.led_din
@@ -192,7 +197,7 @@ module RoboPlater:
     # load cell amplifiers on-board
     load_cell_amp_1 = new NAU7802_Dual
     power_3v3 ~ load_cell_amp_1.power
-    i2c_mux.i2c6 ~ load_cell_amp_1.i2c
+    i2c_mux.i2c1 ~ load_cell_amp_1.i2c
 
     load_cell_1 = new LoadCellScrewTerminal
     load_cell_amp_1.force ~ load_cell_1.power
@@ -206,7 +211,7 @@ module RoboPlater:
 
     load_cell_amp_2 = new NAU7802_Dual
     power_3v3 ~ load_cell_amp_2.power
-    i2c_mux.i2c7 ~ load_cell_amp_2.i2c
+    i2c_mux.i2c2 ~ load_cell_amp_2.i2c
 
     load_cell_3 = new LoadCellScrewTerminal
     load_cell_amp_2.force ~ load_cell_3.power
