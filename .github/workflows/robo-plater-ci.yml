@@ -1,5 +1,12 @@
-
-on: [push, pull_request]
+on:
+  pull_request:
+    paths:
+      - 'robo-plater/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'robo-plater/**'
 
 jobs:
   build:
@@ -11,9 +18,11 @@ jobs:
 
       - name: Build
         uses: docker://ghcr.io/atopile/atopile-kicad
+        with:
+          working-directory: robo-plater
 
       - name: Upload Combined Artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: build
-          path: build
+          name: robo-plater
+          path: robo-plater/build
