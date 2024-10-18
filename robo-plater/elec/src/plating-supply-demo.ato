@@ -1,0 +1,32 @@
+from "esp32-s3/elec/src/esp32-s3.ato" import ESP32S3
+from "plating-supply.ato" import PlatingSupply
+from "xt-connectors/xt-connectors.ato" import XT30_Male_Right_Angle, XT30_Female_Right_Angle
+from "lv2842xlvddcr/lv2842kit.ato" import LV2842Kit
+from "usb-connectors/usb-connectors.ato" import USBCConn
+from "esp32-s3/elec/src/base.ato" import PowerPrioritiser
+
+module PlatingSupplyDemo:
+    signal gnd
+
+    xt30_input = new XT30_Male_Right_Angle
+    usb_conn = new USBCConn
+    regulator = new LV2842Kit
+    esp32 = new ESP32S3
+    plating_supply = new PlatingSupply
+    xt30_output = new XT30_Female_Right_Angle
+    power_prioritiser = new PowerPrioritiser
+    
+    # power
+    xt30_input.power ~ power_prioritiser.high_priority
+    xt30_input.power ~ plating_supply.power_input
+    usb_conn.power ~ power_prioritiser.low_priority
+    power_prioritiser.out ~ regulator.power_in
+    regulator.power_out ~ esp32.power
+    plating_supply.power_output_1 ~ xt30_output.power
+
+    esp32.power.vcc ~ plating_supply.vcc_micro
+
+    usb_conn.usb2 ~ esp32.usb2
+    esp32.spi2 ~ plating_supply.spi_bus
+    esp32.io0 ~ plating_supply.pwm_1
+    esp32.io1 ~ plating_supply.pwm_2

@@ -8,7 +8,7 @@ from "generics/inductors.ato" import Inductor
 module PlatingSupply:
     signal pwm_1
     signal pwm_2
-    signal vcc
+    signal vcc_micro
     spi_bus = new SPI
 
     power_input = new Power
@@ -35,7 +35,7 @@ module PlatingSupply:
 
     pullup_resistor = new Resistor
     pullup_resistor.value = 10kohm +/- 1%
-    controller.MISO ~ pullup_resistor.1; pullup_resistor.2 ~ vcc
+    controller.MISO ~ pullup_resistor.1; pullup_resistor.2 ~ vcc_micro
 
     output_stage_1 = new OutputStage
     power_input ~ output_stage_1.power_input
