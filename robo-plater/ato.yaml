@@ -8,6 +8,8 @@ builds:
     entry: elec/src/io-expander.ato:IOExpander
   channel:
     entry: elec/src/robo-plater.ato:Channel
+  plating-bath-power-supply:
+    entry: elec/src/plating-supply.ato:PlatingSupply
 dependencies:
 - name: generics
   version_spec: '@09ad6baeaab93d53b9b6c90069ac750f4161d76f'
