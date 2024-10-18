@@ -1,5 +1,12 @@
-
-on: [push, pull_request]
+on:
+  pull_request:
+    paths:
+      - 'robo-plater/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'robo-plater/**'
 
 jobs:
   build:
@@ -8,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - run: cd robo-plater
 
       - name: Build
         uses: docker://ghcr.io/atopile/atopile-kicad
