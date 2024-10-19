@@ -1,0 +1,236 @@
+from "generics/interfaces.ato" import DiffPair, Power, SPI
+from "generics/resistors.ato" import Resistor
+from "generics/diodes.ato" import Diode, SchottkyDiode, TVSDiode
+from "generics/capacitors.ato" import Capacitor
+from "generics/mosfets.ato" import NFET
+from "generics/inductors.ato" import Inductor
+
+module PlatingSupply:
+    signal pwm_1
+    signal pwm_2
+    signal vcc_micro
+    spi_bus = new SPI
+
+    power_input = new Power
+    power_output_1 = new Power
+    power_output_2 = new Power
+
+    power_input.voltage = 12V
+
+    # typically ~2V, max 6V
+    power_output_1.voltage = 6V
+    power_output_2.voltage = 6V
+
+    # expected range 2.5-7A (total)
+    power_output_1.current = 5A
+    power_output_2.current = 5A
+
+    controller = new TPS92518PWPR
+    power_input.vcc ~ controller.VIN
+
+    uv_jumper_resistor = new Resistor
+    controller.EN_UV ~ uv_jumper_resistor.1; uv_jumper_resistor.2 ~ controller.VCC1
+    uv_jumper_resistor.value = 0ohm
+    uv_jumper_resistor.footprint = "R0402"
+
+    pullup_resistor = new Resistor
+    pullup_resistor.value = 10kohm +/- 1%
+    controller.MISO ~ pullup_resistor.1; pullup_resistor.2 ~ vcc_micro
+
+    output_stage_1 = new OutputStage
+    power_input ~ output_stage_1.power_input
+    controller.CSP1 ~ output_stage_1.sense.p
+    controller.CSN1 ~ output_stage_1.sense.n
+    controller.GATE1 ~ output_stage_1.gate
+    controller.SW1 ~ output_stage_1.switch
+    controller.BOOT1 ~ output_stage_1.boot
+    controller.VCC1 ~ output_stage_1.vcc
+    controller.GND ~ output_stage_1.gnd
+    output_stage_1.power_output.vcc ~ controller.VLED1
+    output_stage_1.power_output ~ power_output_1
+    pwm_1 ~ controller.PWM1
+
+    # Optional second output stage
+    # Disabled to simplify layout / routing
+
+    # output_stage_2 = new OutputStage
+    # power_input ~ output_stage_2.power_input
+    # controller.CSP2 ~ output_stage_2.sense.p
+    # controller.CSN2 ~ output_stage_2.sense.n
+    # controller.GATE2 ~ output_stage_2.gate
+    # controller.SW2 ~ output_stage_2.switch
+    # controller.BOOT2 ~ output_stage_2.boot
+    # controller.VCC2 ~ output_stage_2.vcc
+    # controller.GND ~ output_stage_2.gnd
+    # output_stage_2.power_output ~ power_output_2
+    # pwm_2 ~ controller.PWM2
+
+    spi_bus.mosi ~ controller.MOSI
+    spi_bus.miso ~ controller.MISO
+    spi_bus.sck ~ controller.SCK
+    spi_bus.cs ~ controller.SSN
+    spi_bus.gnd ~ controller.GND
+
+module OutputStage:
+    power_input = new Power
+    power_output = new Power
+    sense = new DiffPair
+    signal gate
+    signal switch
+    signal boot
+    signal vcc
+    signal gnd
+
+    shunt_resistor = new LRBN25GFER047
+    bootstrap_diode = new MMSD4148T1G
+    buck_diode = new SB1045L_C5277965
+    bootstrap_capacitor = new Capacitor
+    vcc_capacitor = new Capacitor
+    nfet = new FDD8896_C5159784
+    inductor = new FXL0630_3R3_M
+    clamping_diode = new SMAJ15CA_TP
+
+    efficiency = 0.9
+
+    duty_cycle = power_output.voltage / (power_input.voltage * efficiency)
+    switching_frequency = 2MHz
+    off_time = (1 / switching_frequency) * (1 - duty_cycle)
+    off_time_register_value = (off_time * 2.136 * 10**6 * power_output.voltage) / (1s * 1V)
+
+    ripple_voltage_change_proportion = 0.125
+    ripple_voltage_change_current = ripple_voltage_change_proportion * power_output.current
+    inductor_target_range = ((off_time * power_output.voltage) / ripple_voltage_change_current) * 1 to 2
+    assert inductor.value within inductor_target_range
+
+    peak_current = power_output.current + ripple_voltage_change_current / 2
+    peak_threshold_register_value = 255V  # 8-bit register, maximum accuracy is available at the highest value
+    shunt_resistor_target_value = peak_threshold_register_value / (1000 * peak_current)
+    shunt_resistor_minimum_rated_power = power_output.current**2 * shunt_resistor.value
+    assert shunt_resistor_target_value within shunt_resistor.value * 0.95 to 1.05
+    assert shunt_resistor_minimum_rated_power < shunt_resistor.rated_power
+
+    # values from datasheet
+    bootstrap_capacitor.value = (nfet.total_gate_charge + 200uA * 500us) / (7.5V - bootstrap_diode.forward_voltage - 5.2V - 0V) * 1.2 to 2
+
+    bootstrap_current = nfet.total_gate_charge * switching_frequency
+
+    vcc_capacitor.value = 2.2uF to 3uF
+
+    power_input.gnd ~ gnd
+    power_output.gnd ~ gnd
+    buck_diode.anode ~ gnd
+
+    # high-side switch
+    sense.p ~ shunt_resistor.1
+    sense.n ~ shunt_resistor.2
+    gate ~ nfet.gate
+    switch ~ nfet.source
+    power_input.vcc ~ shunt_resistor.1; shunt_resistor.2 ~ nfet.drain; nfet.source ~ inductor.1
+
+    # bootstrap
+    boot ~ bootstrap_diode.cathode
+    vcc ~ bootstrap_diode.anode
+    gnd ~ vcc_capacitor.2
+    bootstrap_diode.anode ~ vcc_capacitor.1
+
+    bootstrap_diode.cathode ~ bootstrap_capacitor.1
+    bootstrap_capacitor.2 ~ buck_diode.cathode
+    buck_diode.cathode ~ inductor.1
+    inductor.2 ~ power_output.vcc
+
+    clamping_diode.anode ~ power_output.vcc
+    clamping_diode.cathode ~ power_input.vcc
+
+    a=0
+
+component TPS92518PWPR:
+    # component TPS92518PWPR
+    footprint = "HTSSOP-24_L7.8-W4.4-P0.65-BL-EP"
+    lcsc_id = "C213546"
+    mpn = "C213546"
+    # pins
+    signal VIN ~ pin 1
+    signal CSP1 ~ pin 2
+    signal CSN1 ~ pin 3
+    signal GATE1 ~ pin 4
+    signal SW1 ~ pin 5
+    signal BOOT1 ~ pin 6
+    signal VCC1 ~ pin 7
+    signal GND ~ pin 8
+    signal VLED1 ~ pin 9
+    signal PWM1 ~ pin 10
+    signal SSN ~ pin 11
+    signal SCK ~ pin 12
+    signal MISO ~ pin 13
+    signal MOSI ~ pin 14
+    signal PWM2 ~ pin 15
+    signal VLED2 ~ pin 16
+    GND ~ pin 17
+    signal VCC2 ~ pin 18
+    signal BOOT2 ~ pin 19
+    signal SW2 ~ pin 20
+    signal GATE2 ~ pin 21
+    signal CSN2 ~ pin 22
+    signal CSP2 ~ pin 23
+    signal EN_UV ~ pin 24
+    signal EP ~ pin 25
+
+component FDD8896_C5159784 from NFET:
+    # component FDD8896_C5159784
+    footprint = "TO-252-2_L6.6-W6.1-P4.57-LS9.9-BR-CW"
+    lcsc_id = "C5159784"
+    mpn = "C5159784"
+
+    # typical, at 5V
+    total_gate_charge = 24nC
+
+    # pins
+    signal gate ~ pin 1
+    signal drain ~ pin 2
+    signal source ~ pin 3
+
+component MMSD4148T1G from Diode:
+    # component MMSD4148T1G
+    footprint = "SOD-123_L2.8-W1.8-LS3.7-RD"
+    lcsc_id = "C11177"
+    mpn = "C11177"
+    forward_voltage = 1000mV
+    # pins
+    signal anode ~ pin 2
+    signal cathode ~ pin 1
+
+component SMAJ15CA_TP from TVSDiode:
+    # component SMAJ15CA_TP
+    footprint = "SMA_L4.4-W2.6-LS5.0-BI"
+    lcsc_id = "C129543"
+    mpn = "C129543"
+    # pins
+    signal anode ~ pin 2
+    signal cathode ~ pin 1
+
+component SB1045L_C5277965 from SchottkyDiode:
+    # component SB1045L_C5277965
+    footprint = "TO-277B-3_L5.4-W4.1-P1.85-LS6.5-TR"
+    lcsc_id = "C5277965"
+    mpn = "C5277965"
+    # pins
+    anode ~ pin 1
+    cathode ~ pin 2
+    anode ~ pin 3
+
+component FXL0630_3R3_M from Inductor:
+    # component FXL0630_3R3_M
+    footprint = "IND-SMD_L7.0-W6.6"
+    lcsc_id = "C167219"
+    mpn = "C167219"
+    value = 3.3uH
+
+component LRBN25GFER047 from Resistor:
+    # component LRBN25GFER047
+    footprint = "R2512"
+    lcsc_id = "C5121141"
+    mpn = "C5121141"
+    rated_power = 3W
+    value = 47mohm +/- 1%
+
+

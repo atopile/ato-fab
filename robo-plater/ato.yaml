@@ -8,6 +8,10 @@ builds:
     entry: elec/src/io-expander.ato:IOExpander
   channel:
     entry: elec/src/robo-plater.ato:Channel
+  plating-bath-power-supply:
+    entry: elec/src/plating-supply.ato:PlatingSupply
+  plating-bath-power-supply-demo:
+    entry: elec/src/plating-supply-demo.ato:PlatingSupplyDemo
 dependencies:
 - name: generics
   version_spec: '@09ad6baeaab93d53b9b6c90069ac750f4161d76f'
@@ -45,3 +49,7 @@ dependencies:
   version_spec: '@62f6a4c6bbca2d423eabed6fb5319fcd8ff55f7c'
   link_broken: false
   path: .ato/modules/nau7802
+- name: usb-connectors
+  version_spec: '@1be66943895494857495c3afe24389a895b9fac8'
+  link_broken: false
+  path: .ato/modules/usb-connectors
