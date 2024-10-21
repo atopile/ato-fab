@@ -1,4 +1,7 @@
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def parse_drill_file(file_path):
@@ -16,14 +19,14 @@ def parse_drill_file(file_path):
     current_tool = None
     is_plated = True  # Assume plated by default
 
-    print(f"Parsing drill file: {file_path}")
+    logger.debug(f"Parsing drill file: {file_path}")
 
     with open(file_path, "r") as file:
         for line_num, line in enumerate(file, 1):
             line = line.strip()
             if line.startswith("; #@! TA.AperFunction,"):
                 is_plated = "Plated" in line
-                print(f"Line {line_num}: Set is_plated to {is_plated}")
+                logger.debug(f"Line {line_num}: Set is_plated to {is_plated}")
             elif line.startswith("T") and "C" in line:
                 tool_match = re.match(r"T(\d+)C([\d.]+)", line)
                 if tool_match:
@@ -34,7 +37,7 @@ def parse_drill_file(file_path):
                     else:
                         non_plated_tools[tool_num] = tool_size
                     drill_coordinates[tool_num] = []
-                    print(
+                    logger.debug(
                         f"Line {line_num}: Added tool T{tool_num} (size: {tool_size}mm) to {'plated' if is_plated else 'non-plated'} tools"
                     )
             elif line.startswith("X") and "Y" in line:
@@ -42,19 +45,19 @@ def parse_drill_file(file_path):
                 if len(coords) == 2 and current_tool is not None:
                     x, y = map(float, coords)
                     drill_coordinates[current_tool].append((x, y))
-                    print(
+                    logger.debug(
                         f"Line {line_num}: Added coordinates ({x}, {y}) to tool T{current_tool}"
                     )
             elif line.startswith("T"):
                 tool_match = re.match(r"T(\d+)", line)
                 if tool_match:
                     current_tool = int(tool_match.group(1))
-                    print(f"Line {line_num}: Set current tool to T{current_tool}")
+                    logger.debug(f"Line {line_num}: Set current tool to T{current_tool}")
 
-    print("\nParsing results:")
-    print(f"Plated tools: {plated_tools}")
-    print(f"Non-plated tools: {non_plated_tools}")
+    logger.debug("Parsing results:")
+    logger.debug(f"Plated tools: {plated_tools}")
+    logger.debug(f"Non-plated tools: {non_plated_tools}")
     for tool, coords in drill_coordinates.items():
-        print(f"T{tool}: {len(coords)} holes")
+        logger.debug(f"T{tool}: {len(coords)} holes")
 
     return plated_tools, non_plated_tools, drill_coordinates
