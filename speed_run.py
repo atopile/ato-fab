@@ -5,14 +5,14 @@ from pathlib import Path
 import numpy as np
 import svg
 
-dot_radius = 2  # radius mm
+dot_radius = 0.5  # radius mm
 dot_count = (10, 10)
 step = (10, 10)
 bounding_box = (110, 110)
 
 # 1.1 Calculate the points where the circles will be placed
-x_padding = (bounding_box[0] - (dot_count[0] - 1) * step[0]) / 2
-y_padding = (bounding_box[1] - (dot_count[1] - 1) * step[1]) / 2
+x_padding = (bounding_box[0] - (dot_count[0]) * step[0] - 1) / 2
+y_padding = (bounding_box[1] - (dot_count[1]) * step[1] - 1) / 2
 
 objpoints = np.zeros((dot_count[0] * dot_count[1], 3), dtype=np.float32)
 objpoints[:, :2] = np.mgrid[0:dot_count[0], 0:dot_count[1]].T.reshape(-1, 2)
@@ -47,7 +47,7 @@ for x, y, _ in objpoints:
 # 1.3 Save the SVG file
 my_dir = Path(__name__).parent
 build_dir = my_dir / "build"
-dots_svg = my_dir / "dots.svg"
+dots_svg = build_dir / "dots.svg"
 
 with dots_svg.open("w") as f:
     f.write(str(canvas))
@@ -57,6 +57,7 @@ import os
 
 import cv2 as cv
 import matplotlib.pyplot as plt
+from PIL import Image
 
 
 def latest[T](glob: list[T]) -> T:
@@ -64,11 +65,13 @@ def latest[T](glob: list[T]) -> T:
 
 
 latest_scan = latest(build_dir.glob("img*.png"))
+print(f"Using {latest_scan}")
 image = cv.imread(latest_scan)
 
-scan_dpi = 3200
+Image.MAX_IMAGE_PIXELS = None  # Disable the PIL limit because we own everything
+scan_dpi = Image.open(latest_scan).info["dpi"][0]
 mm_to_pixels = scan_dpi / 25.4
-circle_points_pixels = (objpoints * mm_to_pixels).astype(np.float32)
+objpoints_pixels = (objpoints * mm_to_pixels).astype(np.float32)
 
 # Invert the image
 image = cv.bitwise_not(image)
@@ -85,6 +88,7 @@ print(f"Image size: {image.shape}")
 
 # %%
 import math
+
 # Find all the circles on a gray-scale image
 gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
 
@@ -97,12 +101,14 @@ for attr in dir(fiber_dots_params):
     print(f"{attr} = {getattr(fiber_dots_params, attr)}")
 
 # Tweak them as required
-def make_params(radius_mm: float, tolerance: float = 0.05) -> cv.SimpleBlobDetector.Params:
+def make_params(radius_mm: float, tolerance: float = 0.3, tolerance_abs: int = 0) -> cv.SimpleBlobDetector.Params:
     params = cv.SimpleBlobDetector.Params()
     area_pixels = math.pi * (radius_mm * mm_to_pixels)**2
     area_range = tolerance * area_pixels
     params.minArea = int(area_pixels - area_range)
     params.maxArea = int(area_pixels + area_range)
+    params.minThreshold = max(0, params.minThreshold - tolerance_abs)
+    params.maxThreshold += tolerance_abs
     return params
 
 params = make_params(dot_radius)
@@ -139,7 +145,7 @@ cv.imwrite(build_dir / "centers.png", centers_image)
 
 # %%
 # Find the homography that flattens the checkerboard
-h, _ = cv.findHomography(imgpoints, circle_points_pixels[:, :2])
+h, _ = cv.findHomography(imgpoints, objpoints_pixels[:, :2])
 
 # Warp the image using the homography
 size = image.shape[:2]
@@ -168,12 +174,12 @@ def draw_grid(image, xs, ys):
         cv.line(image, (0, int(y)), (size[1], int(y)), color, 1)
     return image
 
-circles_xs = np.unique(circle_points_pixels[:, 0])
-circles_ys = np.unique(circle_points_pixels[:, 1])
+circles_xs = np.unique(objpoints_pixels[:, 0])
+circles_ys = np.unique(objpoints_pixels[:, 1])
 grid_image = copy.deepcopy(unwarped_image)
 grid_image = draw_grid(unwarped_image, circles_xs, circles_ys)
 
-for center in circle_points_pixels[:, :2]:
+for center in objpoints_pixels[:, :2]:
     cv.circle(
         grid_image,
         (int(center[0]), int(center[1])),
@@ -199,4 +205,57 @@ display(warped_image)
 # %%
 ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera([objpoints], [imgpoints], gray.shape[::-1], None, None)
 
+# assert ret, "Camera calibration failed"
+h, w = image.shape[:2]
+newcameramtx, roi = cv.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+undistorted_image = cv.undistort(image, mtx, dist, None, newcameramtx)
+
+x, y, w, h = roi
+cropped_image = undistorted_image[y:y+h, x:x+w]
+
+grid_image = copy.deepcopy(cropped_image)
+grid_image = draw_grid(grid_image, circles_xs, circles_ys)
+
+for center in objpoints_pixels[:, :2]:
+    cv.circle(
+        grid_image,
+        (int(center[0]), int(center[1])),
+        int(dot_radius * mm_to_pixels),
+        (0, 0, 255),
+    )
+
+display(grid_image)
+
+cv.imwrite(build_dir / "undistorted.png", grid_image)
+# %%
+
+# Calculate desired output points in mm-space
+output_width = int(bounding_box[0] * mm_to_pixels)
+output_height = int(bounding_box[1] * mm_to_pixels)
+output_size = (output_width, output_height)
+
+# Project the 3D object points through the camera model
+projected_points, _ = cv.projectPoints(
+    objpoints,  # Your 3D points (z=0 for planar points)
+    rvecs[0],   # Rotation vector from calibrateCamera
+    tvecs[0],   # Translation vector from calibrateCamera
+    mtx,        # Camera matrix
+    dist        # Distortion coefficients
+)
+projected_points = projected_points.reshape(-1, 2)
+
+# Create target points in mm-space
+target_points = np.array(
+    [[x * mm_to_pixels, y * mm_to_pixels] for x, y, _ in objpoints]
+)
+
+# Calculate homography between projected and target points
+H, _ = cv.findHomography(projected_points, target_points)
+
+# Combine undistortion and perspective transform in one step
+mapped_img = cv.undistort(image, mtx, dist, None, newcameramtx)
+final_img = cv.warpPerspective(mapped_img, H, output_size)
+
+display(final_img)
+cv.imwrite(build_dir / "final.png", final_img)
 # %%
