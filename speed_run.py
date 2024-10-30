@@ -126,9 +126,6 @@ assert len(imgpoints) == dot_count[0] * dot_count[1], "Incorrect number of circl
 
 # Show the corners we've found
 import copy
-
-display(cv.drawChessboardCorners(copy.deepcopy(image), dot_count, imgpoints, found))
-
 centers_image = copy.deepcopy(image)
 
 for center in imgpoints:
@@ -192,28 +189,14 @@ display(grid_image)
 cv.imwrite(build_dir / "grid.png", grid_image)
 
 # %%
-# Re-warp the image so that when we laser-cut it, the laser's transform is inversed
-warped_image = cv.warpPerspective(
-    unwarped_image,
-    h,
-    unwarped_image.shape[:2],
-    flags=cv.WARP_INVERSE_MAP,
-)
-
-display(warped_image)
+# See: https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#ga69f2545a8b62a6b0fc2ee060dc30559d
+ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera([objpoints], [imgpoints], gray.shape[::-1], None, None)
+R = np.linalg.inv(mtx) @ h @ mtx
+mapx, mapy = cv.initUndistortRectifyMap(mtx, dist, None, R, gray.shape[::-1], cv.CV_32FC1)
+undistorted_image = cv.remap(image, mapx, mapy, cv.INTER_LINEAR)
 
 # %%
-ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera([objpoints], [imgpoints], gray.shape[::-1], None, None)
-
-# assert ret, "Camera calibration failed"
-h, w = image.shape[:2]
-newcameramtx, roi = cv.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
-undistorted_image = cv.undistort(image, mtx, dist, None, newcameramtx)
-
-x, y, w, h = roi
-cropped_image = undistorted_image[y:y+h, x:x+w]
-
-grid_image = copy.deepcopy(cropped_image)
+grid_image = copy.deepcopy(undistorted_image)
 grid_image = draw_grid(grid_image, circles_xs, circles_ys)
 
 for center in objpoints_pixels[:, :2]:
@@ -228,78 +211,3 @@ display(grid_image)
 
 cv.imwrite(build_dir / "undistorted.png", grid_image)
 # %%
-
-# Calculate desired output points in mm-space
-output_width = int(bounding_box[0] * mm_to_pixels)
-output_height = int(bounding_box[1] * mm_to_pixels)
-output_size = (output_width, output_height)
-
-# Project the 3D object points through the camera model
-projected_points, _ = cv.projectPoints(
-    objpoints,  # Your 3D points (z=0 for planar points)
-    rvecs[0],   # Rotation vector from calibrateCamera
-    tvecs[0],   # Translation vector from calibrateCamera
-    mtx,        # Camera matrix
-    dist        # Distortion coefficients
-)
-projected_points = projected_points.reshape(-1, 2)
-
-# Create target points in mm-space
-target_points = np.array(
-    [[x * mm_to_pixels, y * mm_to_pixels] for x, y, _ in objpoints]
-)
-
-# Calculate homography between projected and target points
-H, _ = cv.findHomography(projected_points, target_points)
-
-# Combine undistortion and perspective transform in one step
-mapped_img = cv.undistort(image, mtx, dist, None, newcameramtx)
-final_img = cv.warpPerspective(mapped_img, H, output_size)
-
-grid_image = copy.deepcopy(final_img)
-grid_image = draw_grid(grid_image, circles_xs, circles_ys)
-
-for center in objpoints_pixels[:, :2]:
-    cv.circle(
-        grid_image,
-        (int(center[0]), int(center[1])),
-        int(dot_radius * mm_to_pixels),
-        (0, 0, 255),
-    )
-
-display(grid_image)
-
-cv.imwrite(build_dir / "final.png", grid_image)
-
-# %%
-from scipy.interpolate import CloughTocher2DInterpolator
-
-# Create interpolation between distorted and corrected positions
-distorted_points = imgpoints.reshape(-1, 2)  # Your detected points
-target_points = objpoints_pixels[:, :2]      # Your ideal grid points
-
-interpolator = CloughTocher2DInterpolator(distorted_points, target_points)
-
-pixels = np.mgrid[0:gray.shape[1], 0:gray.shape[0]].reshape(2, -1).T
-
-target_pixels = interpolator(pixels)
-
-def sample_color(image, point):
-    """Sample color at floating point coordinates by rounding"""
-    x, y = int(round(point[0])), int(round(point[1]))
-    return image[y, x]
-
-undistorted_image = np.zeros_like(gray)
-for (t_x, t_y), (d_x, d_y) in zip(target_pixels, distorted_points):
-    if np.isnan(d_x) or np.isnan(d_y):
-        continue
-    if np.isnan(t_x) or np.isnan(t_y):
-        continue
-    undistorted_image[t_y, t_x] = sample_color(gray, (d_x, d_y))
-
-display(undistorted_image)
-
-cv.imwrite(build_dir / "undistorted_interpolated.png", undistorted_image)
-
-# %%
-mapx, mapy = cv.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w,h), cv.CV_32FC1)
