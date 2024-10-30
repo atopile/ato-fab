@@ -256,6 +256,18 @@ H, _ = cv.findHomography(projected_points, target_points)
 mapped_img = cv.undistort(image, mtx, dist, None, newcameramtx)
 final_img = cv.warpPerspective(mapped_img, H, output_size)
 
-display(final_img)
-cv.imwrite(build_dir / "final.png", final_img)
+grid_image = copy.deepcopy(final_img)
+grid_image = draw_grid(grid_image, circles_xs, circles_ys)
+
+for center in objpoints_pixels[:, :2]:
+    cv.circle(
+        grid_image,
+        (int(center[0]), int(center[1])),
+        int(dot_radius * mm_to_pixels),
+        (0, 0, 255),
+    )
+
+display(grid_image)
+
+cv.imwrite(build_dir / "final.png", grid_image)
 # %%
