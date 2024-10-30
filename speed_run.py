@@ -270,4 +270,36 @@ for center in objpoints_pixels[:, :2]:
 display(grid_image)
 
 cv.imwrite(build_dir / "final.png", grid_image)
+
 # %%
+from scipy.interpolate import CloughTocher2DInterpolator
+
+# Create interpolation between distorted and corrected positions
+distorted_points = imgpoints.reshape(-1, 2)  # Your detected points
+target_points = objpoints_pixels[:, :2]      # Your ideal grid points
+
+interpolator = CloughTocher2DInterpolator(distorted_points, target_points)
+
+pixels = np.mgrid[0:gray.shape[1], 0:gray.shape[0]].reshape(2, -1).T
+
+target_pixels = interpolator(pixels)
+
+def sample_color(image, point):
+    """Sample color at floating point coordinates by rounding"""
+    x, y = int(round(point[0])), int(round(point[1]))
+    return image[y, x]
+
+undistorted_image = np.zeros_like(gray)
+for (t_x, t_y), (d_x, d_y) in zip(target_pixels, distorted_points):
+    if np.isnan(d_x) or np.isnan(d_y):
+        continue
+    if np.isnan(t_x) or np.isnan(t_y):
+        continue
+    undistorted_image[t_y, t_x] = sample_color(gray, (d_x, d_y))
+
+display(undistorted_image)
+
+cv.imwrite(build_dir / "undistorted_interpolated.png", undistorted_image)
+
+# %%
+mapx, mapy = cv.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w,h), cv.CV_32FC1)
