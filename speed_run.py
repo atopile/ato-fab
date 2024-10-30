@@ -189,14 +189,25 @@ display(grid_image)
 cv.imwrite(build_dir / "grid.png", grid_image)
 
 # %%
-# See: https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#ga69f2545a8b62a6b0fc2ee060dc30559d
-ret, mtx, dist, rvecs, tvecs = cv.calibrateCamera([objpoints], [imgpoints], gray.shape[::-1], None, None)
-R = np.linalg.inv(mtx) @ h @ mtx
-mapx, mapy = cv.initUndistortRectifyMap(mtx, dist, None, R, gray.shape[::-1], cv.CV_32FC1)
-undistorted_image = cv.remap(image, mapx, mapy, cv.INTER_LINEAR)
+# Create the mapping array (x,y coordinates for each pixel)
+map1 = np.full((*image.shape[:2], 2), np.nan, dtype=np.float32)
 
-# %%
-grid_image = copy.deepcopy(undistorted_image)
+# Fill in the known correspondences
+# imgpoints contains where points are in the source image
+# objpoints_pixels contains where we want them in the destination
+for src, dst in zip(imgpoints, objpoints_pixels):
+    y, x = int(src[0][1]), int(src[0][0])  # src coordinates in image space
+    map1[y, x] = [dst[0], dst[1]]  # dst coordinates where we want this point
+
+# Use remap with interpolation to handle the sparse mapping
+remapped = cv.remap(image, map1, None, cv.INTER_CUBIC)
+
+assert not np.all(np.isnan(map1)), "No pixels mapped"
+
+for y, x, _ in np.argwhere(~np.isnan(map1)):
+    print(f"Mapping {y}, {x} to {map1[y, x]}")
+
+grid_image = copy.deepcopy(remapped)
 grid_image = draw_grid(grid_image, circles_xs, circles_ys)
 
 for center in objpoints_pixels[:, :2]:
