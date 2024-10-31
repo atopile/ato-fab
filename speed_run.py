@@ -1,5 +1,6 @@
 # %%
 # 1. Generate a grid of circles
+import itertools
 import math
 import os
 from pathlib import Path
@@ -34,14 +35,14 @@ def generate_colors(num_colors):
         colors.append(tuple(map(int, bgr_color)))
     return colors
 
-def draw_grid(image, xs, ys):
+def draw_grid(image, xs, ys, line_thickness: int = 1):
     if xs is not None:
         for x, color in zip(xs, generate_colors(len(xs))):
-            cv.line(image, (int(x), 0), (int(x), image.shape[0]), color, 1)
+            cv.line(image, (int(x), 0), (int(x), image.shape[0]), color, line_thickness)
 
     if ys is not None:
         for y, color in zip(ys, generate_colors(len(ys))):
-            cv.line(image, (0, int(y)), (image.shape[1], int(y)), color, 1)
+            cv.line(image, (0, int(y)), (image.shape[1], int(y)), color, line_thickness)
 
     return image
 
@@ -53,6 +54,10 @@ def display2(
     point_size: int | None = None,
     grid_xs: list[int] | None = None,
     grid_ys: list[int] | None = None,
+    marker_color: tuple[int, int, int] = (0, 0, 255),
+    save_image: bool = True,
+    open_image: bool = True,
+    line_thickness: int = 1,
 ):
     if key_points is None:
         key_points = []
@@ -68,18 +73,27 @@ def display2(
         image = image.copy()
 
     for point in key_points:
-        cv.circle(image, (int(point.pt[0]), int(point.pt[1])), int(point.size/2), (0, 0, 255), 1)
+        cv.circle(image, (int(point.pt[0]), int(point.pt[1])), int(point.size/2), marker_color, line_thickness)
 
     for point in points:
-        cv.circle(image, (int(point[0]), int(point[1])), int(point_size), (0, 0, 255), 1)
+        cv.circle(image, (int(point[0]), int(point[1])), int(point_size), marker_color, line_thickness)
 
-    image = draw_grid(image, grid_xs, grid_ys)
+    image = draw_grid(image, grid_xs, grid_ys, line_thickness)
 
-    save(**{title: image})
+    if save_image:
+        save(**{title: image})
 
-    subprocess.run(["open", build_dir / f"{title}.png"])
+    if open_image:
+        subprocess.run(["open", build_dir / f"{title}.png"])
 
     return image
+
+def get_mm_to_pixels(image_path: Path) -> float | None:
+    Image.MAX_IMAGE_PIXELS = None  # Disable the PIL limit because we own everything
+    info = Image.open(image_path).info
+    if "dpi" not in info:
+        return None
+    return info["dpi"][0] / 25.4
 
 # %%
 # General properties
@@ -92,10 +106,10 @@ bounding_box = (110, 110)
 x_padding = (bounding_box[0] - (dot_count[0] - 1) * step[0]) / 2
 y_padding = (bounding_box[1] - (dot_count[1] - 1) * step[1]) / 2
 
-objpoints = np.zeros((dot_count[0] * dot_count[1], 3), dtype=np.float32)
-objpoints[:, :2] = np.mgrid[0:dot_count[0], 0:dot_count[1]].T.reshape(-1, 2)
-objpoints = objpoints * np.array([step[0], step[1], 1]) + np.array([x_padding, y_padding, 0])
-objpoints = objpoints.astype(np.float32)
+calibration_objpoints = np.zeros((dot_count[0] * dot_count[1], 3), dtype=np.float32)
+calibration_objpoints[:, :2] = np.mgrid[0:dot_count[0], 0:dot_count[1]].T.reshape(-1, 2)
+calibration_objpoints = calibration_objpoints * np.array([step[0], step[1], 1]) + np.array([x_padding, y_padding, 0])
+calibration_objpoints = calibration_objpoints.astype(np.float32)
 
 # 1.2 Generate the SVG file
 canvas = svg.SVG(
@@ -112,7 +126,7 @@ canvas = svg.SVG(
         ),
     ],
 )
-for x, y, _ in objpoints:
+for x, y, _ in calibration_objpoints:
     canvas.elements.append(
         svg.Circle(
             cx=f"{x}mm",
@@ -135,14 +149,11 @@ latest_scan = latest(build_dir.glob("img*.png"))
 print(f"Using {latest_scan}")
 image = cv.imread(latest_scan)
 
-Image.MAX_IMAGE_PIXELS = None  # Disable the PIL limit because we own everything
-scan_dpi = Image.open(latest_scan).info["dpi"][0]
-mm_to_pixels = scan_dpi / 25.4
-objpoints_pixels = (objpoints * mm_to_pixels).astype(np.float32)
+scan_mm_to_pixels = get_mm_to_pixels(latest_scan)
 
 # Invert the image
 image = cv.bitwise_not(image)
-image = cv.rotate(image, cv.ROTATE_180)  # TODO: remove me
+# image = cv.rotate(image, cv.ROTATE_180)  # TODO: remove me
 
 display(image)
 print(f"Image size: {image.shape}")
@@ -161,7 +172,7 @@ for attr in dir(fiber_dots_params):
 # Tweak them as required
 def make_params(radius_mm: float, tolerance: float = 0.3, tolerance_abs: int = 0) -> cv.SimpleBlobDetector.Params:
     params = cv.SimpleBlobDetector.Params()
-    area_pixels = math.pi * (radius_mm * mm_to_pixels)**2
+    area_pixels = math.pi * (radius_mm * scan_mm_to_pixels)**2
     area_range = tolerance * area_pixels
     params.minArea = int(area_pixels - area_range)
     params.maxArea = int(area_pixels + area_range)
@@ -180,22 +191,45 @@ datum_objpoints = np.array(
         [104.5, 134.072, 0],  # Bottom right
     ]
 )
-datum_objpoints_pixels = (datum_objpoints * mm_to_pixels).astype(np.float32)
 
-params = make_params(1)
-params.filterByArea = True
-params.filterByCircularity = True
-params.filterByConvexity = True
-params.filterByInertia = False
-detector = cv.SimpleBlobDetector.create(params)
-detected_points = detector.detect(gray)
+# Datum -> Target transform is a simple translation, because they're aligned in design
+datum_center = np.mean(datum_objpoints, axis=0)
+calibration_target_center = np.array([bounding_box[0] / 2, bounding_box[1] / 2, 0])
+calibration_objpoints_datum_space = calibration_objpoints - calibration_target_center + datum_center
+calibration_objpoints_pixels = (calibration_objpoints_datum_space * scan_mm_to_pixels).astype(np.float32)
+datum_objpoints_pixels = (datum_objpoints * scan_mm_to_pixels).astype(np.float32)
 
-print(f"Found {len(detected_points)} datums")
-if len(detected_points) != 4:
-    print("Detected points: " + str([point.pt for point in detected_points]))
-    raise ValueError("Incorrect number of datums found")
+# %%
+# blurred = cv.blur(gray, (20, 20))
+# display2(blurred, "blurred")
+for _t, _r in itertools.product([0.05], [2.2/2]):
+    print(f"Trying radius={_r}, tolerance={_t}")
+    params = make_params(_r, _t)
+    params.filterByArea = True
+    params.filterByCircularity = True
+    params.filterByConvexity = True
+    params.filterByInertia = False
+    detector = cv.SimpleBlobDetector.create(params)
+    detected_points = detector.detect(gray)
 
-display2(gray, "detected_points", key_points=detected_points)
+    print(f"Found {len(detected_points)} datums")
+    if len(detected_points) != 4:
+        print("Detected points: " + str([point.pt for point in detected_points]))
+    else:
+
+        _img = display2(
+            gray,
+            "detected_points",
+            key_points=detected_points,
+            save_image=False,
+            open_image=False,
+            line_thickness=100,
+        )
+
+        display(_img)
+
+        break
+
 
 # %%
 datum_imgpoints = np.array([point.pt for point in detected_points], dtype=np.float32)
@@ -224,25 +258,37 @@ datum_imgpoints = np.array([point for _, point in sorted(sectors)], dtype=np.flo
 
 # %%
 img_to_real_h, _ = cv.findHomography(datum_imgpoints, datum_objpoints_pixels[:, :2])
-corrected_scan = cv.warpPerspective(gray, img_to_real_h, gray.shape[::-1])
+corrected_image = cv.warpPerspective(gray, img_to_real_h, gray.shape[::-1])
 
-display2(
-    corrected_scan,
-    "corrected_scan_datums",
+_corrected_image = display2(
+    corrected_image,
+    "",
     points=datum_objpoints_pixels[:, :2],
-    point_size=2.2/2 * mm_to_pixels,
+    point_size=2.2/2 * scan_mm_to_pixels,
     grid_xs=np.unique(datum_objpoints_pixels[:, 0]),
     grid_ys=np.unique(datum_objpoints_pixels[:, 1]),
+    save_image=False,
+    open_image=False,
+)
+_corrected_image = display2(
+    _corrected_image,
+    "",
+    points=calibration_objpoints_pixels[:, :2],
+    point_size=dot_radius * scan_mm_to_pixels,
+    marker_color=(255, 0, 0),
+    grid_xs=np.unique(calibration_objpoints_pixels[:, 0]),
+    grid_ys=np.unique(calibration_objpoints_pixels[:, 1]),
+    save_image=False,
+    open_image=False,
 )
 
-# %%
 # Find all the laser points on the corrected scan ----------------------------
 params = make_params(dot_radius, 0.1)  # NOTE: the 5% tolerance actually helps, higher is worse
 params.filterByCircularity = False
 params.filterByConvexity = False
 
 found, imgpoints = cv.findCirclesGrid(
-    corrected_scan,
+    corrected_image,
     dot_count,
     cv.CALIB_CB_SYMMETRIC_GRID,
     blobDetector=cv.SimpleBlobDetector.create(params),
@@ -253,24 +299,46 @@ assert found, "Circle processing failed"
 assert len(imgpoints) == dot_count[0] * dot_count[1], "Incorrect number of circles found"
 
 # Show the corners we've found
-display2(corrected_scan, "laser_dots", points=imgpoints.reshape(-1, 2), point_size=dot_radius * mm_to_pixels)
+display2(_corrected_image, "calibration_dots_detected", points=imgpoints.reshape(-1, 2), point_size=dot_radius * scan_mm_to_pixels)
 
 # %%
-# Find the homography that flattens the checkerboard
-h, _ = cv.findHomography(imgpoints, objpoints_pixels[:, :2])
-
-# Warp the image using the homography
-size = image.shape[:2]
-unwarped_image = cv.warpPerspective(corrected_scan, h, size)
+# Find the homography that flattens the board
+h, _ = cv.findHomography(imgpoints, calibration_objpoints_pixels[:, :2])
+unwarped_image = cv.warpPerspective(corrected_image, h, corrected_image.shape[::-1])
 
 # Display a grid overtop the unwarped image to validate it's correct
-circles_xs = np.unique(objpoints_pixels[:, 0])
-circles_ys = np.unique(objpoints_pixels[:, 1])
+circles_xs = np.unique(calibration_objpoints_pixels[:, 0])
+circles_ys = np.unique(calibration_objpoints_pixels[:, 1])
 display2(
     unwarped_image,
     "unwarped_image",
-    points=objpoints_pixels[:, :2],
-    point_size=dot_radius * mm_to_pixels,
+    points=calibration_objpoints_pixels[:, :2],
+    point_size=dot_radius * scan_mm_to_pixels,
     grid_xs=circles_xs,
     grid_ys=circles_ys,
 )
+
+# %%
+# Warp a new image into the datum coordinate system ----------------------------
+latest_target = latest(build_dir.glob("target*.png"))
+target_mm_to_pixels = get_mm_to_pixels(latest_target) or 3200
+
+assert target_mm_to_pixels == scan_mm_to_pixels, "Target DPI doesn't match"
+
+target_image = cv.imread(latest_target, cv.IMREAD_UNCHANGED)
+display(target_image)
+
+# Warp wrt datum coordinate system
+output_size = (int(bounding_box[0] * target_mm_to_pixels), int(bounding_box[1] * target_mm_to_pixels))
+target_output = cv.warpPerspective(
+    target_image,
+    h,
+    output_size,
+    borderMode=cv.BORDER_CONSTANT,
+    borderValue=(0, 0, 0, 0),
+)
+display(target_output)
+
+cv.imwrite(build_dir / "out-target.png", target_output)
+
+# %%
