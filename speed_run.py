@@ -270,17 +270,6 @@ _corrected_image = display2(
     save_image=False,
     open_image=False,
 )
-_corrected_image = display2(
-    _corrected_image,
-    "",
-    points=calibration_objpoints_pixels[:, :2],
-    point_size=dot_radius * scan_mm_to_pixels,
-    marker_color=(255, 0, 0),
-    grid_xs=np.unique(calibration_objpoints_pixels[:, 0]),
-    grid_ys=np.unique(calibration_objpoints_pixels[:, 1]),
-    save_image=False,
-    open_image=False,
-)
 
 # Find all the laser points on the corrected scan ----------------------------
 params = make_params(dot_radius, 0.1)  # NOTE: the 5% tolerance actually helps, higher is worse
@@ -298,8 +287,27 @@ print(f"Found {len(imgpoints) if imgpoints is not None else 'no'} circles")
 assert found, "Circle processing failed"
 assert len(imgpoints) == dot_count[0] * dot_count[1], "Incorrect number of circles found"
 
+# %%
 # Show the corners we've found
-display2(_corrected_image, "calibration_dots_detected", points=imgpoints.reshape(-1, 2), point_size=dot_radius * scan_mm_to_pixels)
+_corrected_image = display2(
+    _corrected_image,
+    "",
+    points=calibration_objpoints_pixels[:, :2],
+    point_size=dot_radius * scan_mm_to_pixels,
+    marker_color=(255, 0, 0),
+    grid_xs=np.unique(calibration_objpoints_pixels[:, 0]),
+    grid_ys=np.unique(calibration_objpoints_pixels[:, 1]),
+    save_image=False,
+    open_image=False,
+    line_thickness=10,
+)
+display2(
+    _corrected_image,
+    "calibration_dots_detected",
+    points=imgpoints.reshape(-1, 2),
+    point_size=dot_radius * scan_mm_to_pixels,
+    line_thickness=10,
+)
 
 # %%
 # Find the homography that flattens the board
@@ -340,5 +348,11 @@ target_output = cv.warpPerspective(
 display(target_output)
 
 cv.imwrite(build_dir / "out-target.png", target_output)
+
+# %%
+import pickle
+
+with open(build_dir / "working_homography.pickle", "wb") as f:
+    pickle.dump(h, f)
 
 # %%
