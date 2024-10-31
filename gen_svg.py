@@ -25,7 +25,7 @@ import svgpathtools
 import numpy as np
 
 
-import utils
+# import utils
 
 log = logging.getLogger(__name__)
 
@@ -37,54 +37,54 @@ logging.basicConfig(
 )
 
 
-class Checker:
-    _checks: list["Check"]
-    def __init__(self):
-        self._checks = []
+# class Checker:
+#     _checks: list["Check"]
+#     def __init__(self):
+#         self._checks = []
 
-    @dataclass
-    class Check:
-        name: str
-        description: str
-        result: bool
+#     @dataclass
+#     class Check:
+#         name: str
+#         description: str
+#         result: bool
 
-    def report(self):
-        table = Table("Name", "Description", "Result", title="Checks")
+#     def report(self):
+#         table = Table("Name", "Description", "Result", title="Checks")
 
-        for check in self._checks:
-            table.add_row(check.name, check.description, "✅" if check.result else "❌")
+#         for check in self._checks:
+#             table.add_row(check.name, check.description, "✅" if check.result else "❌")
 
-        rich.print(table)
+#         rich.print(table)
 
-    def check(self, func):
-        check = self.Check(name=func.__name__, description=func.__doc__, result=True)
-        try:
-            return func()
-        except Exception:
-            check.result = False
-            self.report()
-            exit(1)  # TODO: allow bundling of errors
-        finally:
-            self._checks.append(check)
+#     def check(self, func):
+#         check = self.Check(name=func.__name__, description=func.__doc__, result=True)
+#         try:
+#             return func()
+#         except Exception:
+#             check.result = False
+#             self.report()
+#             exit(1)  # TODO: allow bundling of errors
+#         finally:
+#             self._checks.append(check)
 
 
-checker = Checker()
+# checker = Checker()
 
 
 # Load config
-yaml = YAML()
-if config_files := list(Path(__name__).parent.glob("config.y*ml")):
-    config = yaml.load(config_files[0])
-else:
-    config = {}
+# yaml = YAML()
+# if config_files := list(Path(__name__).parent.glob("config.y*ml")):
+#     config = yaml.load(config_files[0])
+# else:
+#     config = {}
 
 # Ensure output directory exists
-build_dir = Path("build")
-build_dir.mkdir(exist_ok=True)
+# build_dir = Path("build")
+# build_dir.mkdir(exist_ok=True)
 
 # TODO: wrap in a name == __main__ guard
 # TODO: switch back
-inputs_dir = Path(".")  # default to current directory
+# inputs_dir = Path(".")  # default to current directory
 # inputs_dir = Path("robo-plater/elec/layout/plating-bath-power-supply-demo")  # default to current directory
 
 def find_one_file(directory: Path, pattern: str) -> Path:
@@ -96,7 +96,7 @@ def find_one_file(directory: Path, pattern: str) -> Path:
 )
     return files[0]
 
-input_pcb_file = find_one_file(inputs_dir, "*.kicad_pcb")
+# input_pcb_file = find_one_file(inputs_dir, "*.kicad_pcb")
 
 # Check KiCAD version and make sure it's working
 if version := kicad_cli(kicad_cli.version()).exec():
@@ -107,8 +107,8 @@ if version := kicad_cli(kicad_cli.version()).exec():
         exit(1)
 
 # Generate KiCAD exports
-kicad_build_dir = build_dir / "kicad"
-kicad_build_dir.mkdir(exist_ok=True)
+# kicad_build_dir = build_dir / "kicad"
+# kicad_build_dir.mkdir(exist_ok=True)
 
 # TODO: move to utils file
 def kicad_export(command) -> str:
@@ -120,12 +120,12 @@ def kicad_export(command) -> str:
         ),
     ).exec(check=True)
 
-kicad_export(
-    kicad_cli.pcb.export.drill(
-        INPUT_FILE=str(input_pcb_file.absolute()),
-        output=str(kicad_build_dir.absolute()),
-    )
-)
+# kicad_export(
+#     kicad_cli.pcb.export.drill(
+#         INPUT_FILE=str(input_pcb_file.absolute()),
+#         output=str(kicad_build_dir.absolute()),
+#     )
+# )
 
 # TODO: move to utils file
 def export_svg(input_file: Path, layer: str, output_dir: Path) -> Path:
@@ -157,10 +157,10 @@ def export_dxf(input_file: Path, layer: str, output_dir: Path) -> Path:
     )
     return output_path
 
-edge_cuts_file = export_svg(input_pcb_file, "Edge.Cuts", kicad_build_dir)
+# edge_cuts_file = export_svg(input_pcb_file, "Edge.Cuts", kicad_build_dir)
 
 # Find bounding box
-paths, _ = svgpathtools.svg2paths(edge_cuts_file)
+# paths, _ = svgpathtools.svg2paths(edge_cuts_file)
 def paths_bounding_box(paths: list[svgpathtools.Path]):
     # Create an empty list to store all bounding boxes
     bboxes = []
@@ -179,67 +179,67 @@ def paths_bounding_box(paths: list[svgpathtools.Path]):
     return xmin, xmax, ymin, ymax
 
 
-xmin, xmax, ymin, ymax = paths_bounding_box(paths)
-log.info(f"Bounding box: {xmin=}, {xmax=}, {ymin=}, {ymax=}")
+# xmin, xmax, ymin, ymax = paths_bounding_box(paths)
+# log.info(f"Bounding box: {xmin=}, {xmax=}, {ymin=}, {ymax=}")
 
-@checker.check
-def check_bounding_box():
-    if working_area := config.get("working_area"):
-        assert isinstance(working_area, dict)
-        x_span = xmax - xmin
-        y_span = ymax - ymin
+# @checker.check
+# def check_bounding_box():
+#     if working_area := config.get("working_area"):
+#         assert isinstance(working_area, dict)
+#         x_span = xmax - xmin
+#         y_span = ymax - ymin
 
-        if x_area := working_area.get("x"):
-            assert x_span <= x_area
+#         if x_area := working_area.get("x"):
+#             assert x_span <= x_area
 
-        if y_area := working_area.get("y"):
-            assert y_span <= y_area
+#         if y_area := working_area.get("y"):
+#             assert y_span <= y_area
 
 
-origin_offset = (xmin, ymin)
-board_width = xmax - xmin
-board_height = ymax - ymin
+# origin_offset = (xmin, ymin)
+# board_width = xmax - xmin
+# board_height = ymax - ymin
 
 
 # Generate holes SVG files for laser drilling
-drill_file = find_one_file(kicad_build_dir, "*.drl")
-plated_tools, unplated_tools, holes = utils.parse_drill_file(drill_file)
+# drill_file = find_one_file(kicad_build_dir, "*.drl")
+# plated_tools, unplated_tools, holes = utils.parse_drill_file(drill_file)
 
-def generate_holes_svg(
-    holes: dict[int, list[tuple[float, float]]],
-    tools: dict[int, float],
-    hole_color: str,
-    output_file: Path,
-) -> svg.SVG:
-    def map_holes(holes: dict[int, list[tuple[float, float]]], tools: dict[int, float]):
-        output = []
-        for tool, dia in tools.items():
-            for pos in holes[tool]:
-                output.append((dia, pos))
-        return output
+# def generate_holes_svg(
+#     holes: dict[int, list[tuple[float, float]]],
+#     tools: dict[int, float],
+#     hole_color: str,
+#     output_file: Path,
+# ) -> svg.SVG:
+#     def map_holes(holes: dict[int, list[tuple[float, float]]], tools: dict[int, float]):
+#         output = []
+#         for tool, dia in tools.items():
+#             for pos in holes[tool]:
+#                 output.append((dia, pos))
+#         return output
 
-    target_list = map_holes(holes, tools)
-    circles = []
+#     target_list = map_holes(holes, tools)
+#     circles = []
 
-    for dia, (x, y) in target_list:
-        hole = svg.Circle(
-            cx = x - origin_offset[0],
-            cy = -y - origin_offset[1],
-            r = dia/2,
-            fill = hole_color,
-        )
-        circles.append(hole)
+#     for dia, (x, y) in target_list:
+#         hole = svg.Circle(
+#             cx = x - origin_offset[0],
+#             cy = -y - origin_offset[1],
+#             r = dia/2,
+#             fill = hole_color,
+#         )
+#         circles.append(hole)
 
-    _svg = svg.SVG(
-        width=board_width,
-        height=board_height,
-        elements=circles,
-    )
+#     _svg = svg.SVG(
+#         width=board_width,
+#         height=board_height,
+#         elements=circles,
+#     )
 
-    output_file.write_text(str(_svg))
+#     output_file.write_text(str(_svg))
 
-generate_holes_svg(holes, plated_tools, "red", build_dir / "plated_holes.svg")
-generate_holes_svg(holes, unplated_tools, "blue", build_dir / "unplated_holes.svg")
+# generate_holes_svg(holes, plated_tools, "red", build_dir / "plated_holes.svg")
+# generate_holes_svg(holes, unplated_tools, "blue", build_dir / "unplated_holes.svg")
 # # %%
 # # Process SVG outlines for material to be removed
 # top_copper_file = export_svg(input_pcb_file, "F.Cu", kicad_build_dir)
@@ -291,5 +291,5 @@ generate_holes_svg(holes, unplated_tools, "blue", build_dir / "unplated_holes.sv
 # top_copper_file = Path("build/kicad/F.Cu.svg").absolute()
 
 # Report results
-checker.report()
-log.info("Done! :sparkles:")
+# checker.report()
+# log.info("Done! :sparkles:")

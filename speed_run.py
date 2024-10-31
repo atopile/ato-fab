@@ -1,19 +1,38 @@
 # %%
 # 1. Generate a grid of circles
 import itertools
+import logging
 import math
 import os
-from pathlib import Path
+import pickle
 import subprocess
+from pathlib import Path
+from typing import Iterable
 
+import cairosvg
+import cairosvg.svg
 import cv2 as cv
 import matplotlib.pyplot as plt
 import numpy as np
 import svg
 from PIL import Image
 
+import gen_svg
+
+logging.basicConfig(level=logging.DEBUG)
+log = logging.getLogger(__name__)
+
+
 # Helper functions
-def latest[T](glob: list[T]) -> T:
+def only_one[T](glob: Iterable[T]) -> T:
+    files = list(glob)
+    if len(files) != 1:
+        raise ValueError(
+            f"Expected exactly one, but found {len(files)}"
+        )
+    return files[0]
+
+def latest[T](glob: Iterable[T]) -> T:
     return max(glob, key=os.path.getctime)
 
 def save(**kwargs):
@@ -21,7 +40,7 @@ def save(**kwargs):
         cv.imwrite(build_dir / f"{k}.png", v)
 
 def display(image):
-    plt.imshow(cv.cvtColor(image, cv.COLOR_BGR2RGB))
+    plt.imshow(image)
     plt.axis("off")
     plt.show()
 
@@ -329,7 +348,7 @@ display2(
 # %%
 # Warp a new image into the datum coordinate system ----------------------------
 latest_target = latest(build_dir.glob("target*.png"))
-target_mm_to_pixels = get_mm_to_pixels(latest_target) or 3200
+target_mm_to_pixels = get_mm_to_pixels(latest_target) or scan_mm_to_pixels
 
 assert target_mm_to_pixels == scan_mm_to_pixels, "Target DPI doesn't match"
 
@@ -350,9 +369,154 @@ display(target_output)
 cv.imwrite(build_dir / "out-target.png", target_output)
 
 # %%
-import pickle
+# Only do this if you're running laser calibration and have confirmed it works
+# with open(my_dir / "working_homography.pickle", "wb") as f:
+#     pickle.dump(h, f)
 
-with open(build_dir / "working_homography.pickle", "wb") as f:
-    pickle.dump(h, f)
+# %%
+input_pcb_file = only_one(build_dir.glob("*.kicad_pcb"))
 
+kicad_build_dir = build_dir / "kicad"
+
+# Process SVG outlines for material to be removed
+edge_cuts_file = gen_svg.export_svg(input_pcb_file, "Edge.Cuts", kicad_build_dir)
+top_copper_file = gen_svg.export_svg(input_pcb_file, "F.Cu", kicad_build_dir)
+bottom_copper_file = gen_svg.export_svg(input_pcb_file, "B.Cu", kicad_build_dir)
+mask_file = gen_svg.export_svg(input_pcb_file, "F.Mask", kicad_build_dir)
+paste_file = gen_svg.export_svg(input_pcb_file, "F.Paste", kicad_build_dir)
+
+# %%
+with open(my_dir / "working_homography.pickle", "rb") as f:
+    design_to_target_h = pickle.load(f)
+
+
+offset = (23.25, -175.75)
+dpi = 1000
+output_size = (int(bounding_box[0] * dpi / 25.4), int(bounding_box[1] * dpi / 25.4))
+
+
+def scale_homograph(H: np.ndarray, scale_factor: float) -> np.ndarray:
+    """Scale a homography matrix to work with resized images.
+
+    Args:
+        H: 3x3 homography matrix
+        scale_factor: Factor to scale by (use < 1 for smaller images)
+    """
+    scale_matrix = np.array([
+        [scale_factor, 0, 0],
+        [0, scale_factor, 0],
+        [0, 0, 1]
+    ])
+    return scale_matrix @ H @ np.linalg.inv(scale_matrix)
+
+
+scaled_h = scale_homograph(design_to_target_h, dpi / (target_mm_to_pixels * 25.4))
+
+# %%
+def process_svg(svg_path: Path, output_path: Path, mirror_x: bool = False):
+    png_data = cairosvg.svg2png(
+        url=str(svg_path),
+        dpi=dpi,
+        scale=1,
+        background_color="none"
+    )
+
+    loaded = cv.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv.IMREAD_UNCHANGED)
+    image = np.zeros((output_size[1], output_size[0], 4), dtype=np.uint8) + loaded
+
+    # Apply offset
+    offset_pixels = (np.array(offset) * target_mm_to_pixels).astype(int)
+    image = np.roll(image, offset_pixels, axis=(0, 1))
+
+    transformed_image = cv.warpPerspective(image, scaled_h, output_size)
+
+    if mirror_x:
+        transformed_image = cv.flip(transformed_image, 1)
+
+    cv.imwrite(output_path, transformed_image)
+
+# %%
+process_svg(top_copper_file, build_dir / "top_copper.png")
+# process_svg(edge_cuts_file, build_dir / "edge_cuts.png")
+process_svg(bottom_copper_file, build_dir / "bottom_copper.png", True)
+process_svg(mask_file, build_dir / "mask.png")
+process_svg(paste_file, build_dir / "paste.png")
+
+# %%
+def load_svg_as_mask(svg_path: Path, dpi: float) -> np.ndarray:
+    png_data = cairosvg.svg2png(
+        url=str(svg_path),
+        dpi=dpi,
+        scale=1,
+        background_color="none"
+    )
+
+    image = cv.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv.IMREAD_UNCHANGED)
+
+    # Convert to a binary mask of transparent or not
+    mask = image[:, :, 3] != 0
+
+    return mask
+
+
+def mask_to_bgra(mask: np.ndarray) -> np.ndarray:
+    return np.repeat(mask[:, :, np.newaxis] * 255, 3, axis=2)
+
+
+def stroke_mask(image: np.ndarray, stroke_size: int) -> np.ndarray:
+    # Create a kernel for dilation
+    kernel = np.ones((stroke_size, stroke_size), np.uint8)
+
+    # If image has alpha channel, use it as mask
+    if len(image.shape) == 2:
+        mask = image
+    elif image.shape[2] == 4:
+        mask = image[:, :, 3]
+    else:
+        # Convert to grayscale if no alpha
+        mask = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+
+    # Dilate the mask
+    dilated = cv.dilate(mask, kernel, iterations=1)
+
+    # Apply stroke color where dilated but not in original
+    stroke_mask = (dilated != 0) & (mask == 0)
+    return stroke_mask
+
+
+edge_cuts_image = (load_svg_as_mask(edge_cuts_file, dpi) * 255).astype(np.uint8)  # This returns a binary mask
+
+# Clip the edge cuts mask to the bounding box
+def clip(mask: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
+    return mask[bounds[1]:bounds[1]+bounds[3], bounds[0]:bounds[0]+bounds[2]]
+
+
+edge_cuts_expanded = edge_cuts_image.copy()
+box = cv.boundingRect(edge_cuts_expanded)
+cv.floodFill(
+    edge_cuts_expanded,
+    np.zeros((edge_cuts_expanded.shape[0] + 2, edge_cuts_expanded.shape[1] + 2), dtype=np.uint8),
+    (box[0] + box[2] // 2, box[1] + box[3] // 2),
+    255
+)
+
+edge_width = 3  # mm
+stroked = edge_cuts_expanded.copy()
+stroked[stroke_mask(edge_cuts_expanded, int(edge_width * dpi / 25.4))] = 255
+
+stroked_box = cv.boundingRect(stroked)
+
+# %%
+def process(svg_path: Path) -> np.ndarray:
+    mask = mask_to_bgra(load_svg_as_mask(svg_path, dpi))
+    clipped = clip(mask, stroked_box)
+    return cv.rotate(clipped, cv.ROTATE_90_CLOCKWISE)
+
+top_copper = process(top_copper_file)
+
+# TODO: flip after datum translation
+bottom_copper = cv.flip(process(bottom_copper_file), 0)
+
+# %%
+display2(bottom_copper, "bottom_copper")
 # %%
