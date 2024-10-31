@@ -205,9 +205,9 @@ def make_params(radius_mm: float, tolerance: float = 0.3, tolerance_abs: int = 0
 datum_objpoints = np.array(
     [
         [4.344, 6.197, 0],  # Top left
-        [104.5, 6.197, 0],  # Top right
-        [4.344, 134.072, 0],  # Bottom left
-        [104.5, 134.072, 0],  # Bottom right
+        [104.5, 6.072, 0],  # Top right
+        [4.504, 134.072, 0],  # Bottom left
+        [104.66, 133.947, 0],  # Bottom right
     ]
 )
 
@@ -386,14 +386,12 @@ mask_file = gen_svg.export_svg(input_pcb_file, "F.Mask", kicad_build_dir)
 paste_file = gen_svg.export_svg(input_pcb_file, "F.Paste", kicad_build_dir)
 
 # %%
-with open(my_dir / "working_homography.pickle", "rb") as f:
-    design_to_target_h = pickle.load(f)
+# with open(my_dir / "working_homography.pickle", "rb") as f:
+#     design_to_target_h = pickle.load(f)
+design_to_target_h = h
 
-
-offset = (23.25, -175.75)
 dpi = 1000
 output_size = (int(bounding_box[0] * dpi / 25.4), int(bounding_box[1] * dpi / 25.4))
-
 
 def scale_homograph(H: np.ndarray, scale_factor: float) -> np.ndarray:
     """Scale a homography matrix to work with resized images.
@@ -413,36 +411,6 @@ def scale_homograph(H: np.ndarray, scale_factor: float) -> np.ndarray:
 scaled_h = scale_homograph(design_to_target_h, dpi / (target_mm_to_pixels * 25.4))
 
 # %%
-def process_svg(svg_path: Path, output_path: Path, mirror_x: bool = False):
-    png_data = cairosvg.svg2png(
-        url=str(svg_path),
-        dpi=dpi,
-        scale=1,
-        background_color="none"
-    )
-
-    loaded = cv.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv.IMREAD_UNCHANGED)
-    image = np.zeros((output_size[1], output_size[0], 4), dtype=np.uint8) + loaded
-
-    # Apply offset
-    offset_pixels = (np.array(offset) * target_mm_to_pixels).astype(int)
-    image = np.roll(image, offset_pixels, axis=(0, 1))
-
-    transformed_image = cv.warpPerspective(image, scaled_h, output_size)
-
-    if mirror_x:
-        transformed_image = cv.flip(transformed_image, 1)
-
-    cv.imwrite(output_path, transformed_image)
-
-# %%
-process_svg(top_copper_file, build_dir / "top_copper.png")
-# process_svg(edge_cuts_file, build_dir / "edge_cuts.png")
-process_svg(bottom_copper_file, build_dir / "bottom_copper.png", True)
-process_svg(mask_file, build_dir / "mask.png")
-process_svg(paste_file, build_dir / "paste.png")
-
-# %%
 def load_svg_as_mask(svg_path: Path, dpi: float) -> np.ndarray:
     png_data = cairosvg.svg2png(
         url=str(svg_path),
@@ -454,45 +422,47 @@ def load_svg_as_mask(svg_path: Path, dpi: float) -> np.ndarray:
     image = cv.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv.IMREAD_UNCHANGED)
 
     # Convert to a binary mask of transparent or not
-    mask = image[:, :, 3] != 0
+    mask = (image[:, :, 3] != 0).astype(np.uint8) * 255
 
     return mask
-
-
-def mask_to_bgra(mask: np.ndarray) -> np.ndarray:
-    return np.repeat(mask[:, :, np.newaxis] * 255, 3, axis=2)
 
 
 def stroke_mask(image: np.ndarray, stroke_size: int) -> np.ndarray:
     # Create a kernel for dilation
     kernel = np.ones((stroke_size, stroke_size), np.uint8)
 
-    # If image has alpha channel, use it as mask
-    if len(image.shape) == 2:
+    # Ensure the image is a mask
+    if image.dtype != np.uint8:
+        image = image.astype(np.uint8)
+    if image.ndim == 2:
         mask = image
-    elif image.shape[2] == 4:
-        mask = image[:, :, 3]
     else:
-        # Convert to grayscale if no alpha
-        mask = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        mask = image[:, :, 3]
 
     # Dilate the mask
     dilated = cv.dilate(mask, kernel, iterations=1)
 
     # Apply stroke color where dilated but not in original
-    stroke_mask = (dilated != 0) & (mask == 0)
-    return stroke_mask
+    return (dilated != 0) & (image == 0)
 
-
-edge_cuts_image = (load_svg_as_mask(edge_cuts_file, dpi) * 255).astype(np.uint8)  # This returns a binary mask
 
 # Clip the edge cuts mask to the bounding box
 def clip(mask: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
     return mask[bounds[1]:bounds[1]+bounds[3], bounds[0]:bounds[0]+bounds[2]]
 
 
+edge_cuts_image = load_svg_as_mask(edge_cuts_file, dpi)
+display(edge_cuts_image)
+
+# %%
+# Flood fill edge cuts and expand them by the stroke width
+edge_width = 1  # mm
 edge_cuts_expanded = edge_cuts_image.copy()
 box = cv.boundingRect(edge_cuts_expanded)
+# print(box)
+# display2(clip(edge_cuts_expanded, box))
+
+# %%
 cv.floodFill(
     edge_cuts_expanded,
     np.zeros((edge_cuts_expanded.shape[0] + 2, edge_cuts_expanded.shape[1] + 2), dtype=np.uint8),
@@ -500,23 +470,60 @@ cv.floodFill(
     255
 )
 
-edge_width = 3  # mm
 stroked = edge_cuts_expanded.copy()
 stroked[stroke_mask(edge_cuts_expanded, int(edge_width * dpi / 25.4))] = 255
-
 stroked_box = cv.boundingRect(stroked)
 
 # %%
-def process(svg_path: Path) -> np.ndarray:
-    mask = mask_to_bgra(load_svg_as_mask(svg_path, dpi))
+offset = np.array([-3.931 + 1.3, -0.502 - 3.2]) * dpi / 25.4  # x, y offset
+# offset = np.array([0, 0]) * dpi / 25.4  # x, y offset
+
+def process(svg_path: Path) -> Path:
+    mask = load_svg_as_mask(svg_path, dpi)
     clipped = clip(mask, stroked_box)
-    return cv.rotate(clipped, cv.ROTATE_90_CLOCKWISE)
+    rotated = cv.rotate(clipped, cv.ROTATE_90_CLOCKWISE)
 
-top_copper = process(top_copper_file)
+    blank = np.ones((output_size[1], output_size[0]), dtype=np.uint8) * 255
+    start_y = int(blank.shape[0] / 2 - rotated.shape[0] / 2 + offset[1])
+    start_x = int(blank.shape[1] / 2 - rotated.shape[1] / 2 + offset[0])
 
-# TODO: flip after datum translation
-bottom_copper = cv.flip(process(bottom_copper_file), 0)
+    if start_y < 0:
+        start_y = 0
+        print("Warning: offset is too large, clipping y")
 
-# %%
-display2(bottom_copper, "bottom_copper")
+    if start_y + rotated.shape[0] > blank.shape[0]:
+        start_y = blank.shape[0] - rotated.shape[0]
+        print("Warning: offset is too large, clipping y")
+
+    if start_x < 0:
+        start_x = 0
+        print("Warning: offset is too large, clipping x")
+
+    if start_x + rotated.shape[1] > blank.shape[1]:
+        start_x = blank.shape[1] - rotated.shape[1]
+        print("Warning: offset is too large, clipping x")
+
+    blank[
+        start_y:start_y + rotated.shape[0],
+        start_x:start_x + rotated.shape[1],
+    ] = rotated
+
+    warped = cv.warpPerspective(
+        blank,
+        scaled_h,
+        output_size,
+        borderValue=(255, 255, 255),
+    )
+
+    output_dir = build_dir / "shoot"
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / f"{svg_path.stem}.png"
+    cv.imwrite(output_path, warped)
+    return output_path
+
+process(top_copper_file)
+# process(bottom_copper_file)
+# process(mask_file)
+# process(paste_file)
+
 # %%
