@@ -29,12 +29,12 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(message)s",
-    datefmt="[%X]",
-    handlers=[RichHandler(rich_tracebacks=True)]
-)
+# logging.basicConfig(
+#     level=logging.DEBUG,
+#     format="%(message)s",
+#     datefmt="[%X]",
+#     handlers=[RichHandler(rich_tracebacks=True)]
+# )
 
 
 # class Checker:

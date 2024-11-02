@@ -1,25 +1,22 @@
 # %%
+
 # 1. Generate a grid of circles
 import itertools
 import logging
 import math
 import os
-import pickle
 import subprocess
 from pathlib import Path
 from typing import Iterable
 
-import cairosvg
-import cairosvg.svg
-import cv2 as cv
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import svg
 from PIL import Image
 
-import gen_svg
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
@@ -37,7 +34,8 @@ def latest[T](glob: Iterable[T]) -> T:
 
 def save(**kwargs):
     for k, v in kwargs.items():
-        cv.imwrite(build_dir / f"{k}.png", v)
+        img = cv2.cvtColor(v, cv2.COLOR_BGRA2RGBA)
+        cv2.imwrite(build_dir / f"{k}.png", img)
 
 def display(image):
     plt.imshow(image)
@@ -49,7 +47,7 @@ def generate_colors(num_colors):
     for i in range(num_colors):
     # Convert HSV to BGR - Hue cycles from 0 to 180 (in OpenCV), full saturation and value
         hsv_color = np.uint8([[[i * 180 // num_colors, 255, 255]]])
-        bgr_color = cv.cvtColor(hsv_color, cv.COLOR_HSV2BGR)[0][0]
+        bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0][0]
         # Convert to regular tuple of ints
         colors.append(tuple(map(int, bgr_color)))
     return colors
@@ -57,18 +55,18 @@ def generate_colors(num_colors):
 def draw_grid(image, xs, ys, line_thickness: int = 1):
     if xs is not None:
         for x, color in zip(xs, generate_colors(len(xs))):
-            cv.line(image, (int(x), 0), (int(x), image.shape[0]), color, line_thickness)
+            cv2.line(image, (int(x), 0), (int(x), image.shape[0]), color, line_thickness)
 
     if ys is not None:
         for y, color in zip(ys, generate_colors(len(ys))):
-            cv.line(image, (0, int(y)), (image.shape[1], int(y)), color, line_thickness)
+            cv2.line(image, (0, int(y)), (image.shape[1], int(y)), color, line_thickness)
 
     return image
 
 def display2(
     image,
     title: str = "image",
-    key_points: list[cv.KeyPoint] | None = None,
+    key_points: list[cv2.KeyPoint] | None = None,
     points: np.ndarray | None = None,
     point_size: int | None = None,
     grid_xs: list[int] | None = None,
@@ -77,6 +75,7 @@ def display2(
     save_image: bool = True,
     open_image: bool = True,
     line_thickness: int = 1,
+    downscale: float = 1,
 ):
     if key_points is None:
         key_points = []
@@ -87,15 +86,18 @@ def display2(
         points = []
 
     if len(image.shape) == 2:  # Check if grayscale
-        image = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     else:
         image = image.copy()
 
+    if downscale != 1:
+        image = cv2.resize(image, None, fx=downscale, fy=downscale)
+
     for point in key_points:
-        cv.circle(image, (int(point.pt[0]), int(point.pt[1])), int(point.size/2), marker_color, line_thickness)
+        cv2.circle(image, (int(point.pt[0]), int(point.pt[1])), int(point.size/2), marker_color, line_thickness)
 
     for point in points:
-        cv.circle(image, (int(point[0]), int(point[1])), int(point_size), marker_color, line_thickness)
+        cv2.circle(image, (int(point[0]), int(point[1])), int(point_size), marker_color, line_thickness)
 
     image = draw_grid(image, grid_xs, grid_ys, line_thickness)
 
@@ -116,45 +118,45 @@ def get_mm_to_pixels(image_path: Path) -> float | None:
 
 # %%
 # General properties
-dot_radius = 0.5  # radius mm
-dot_count = (14, 14)
-step = (8, 8)
-bounding_box = (110, 110)
+drill_radius = 0.25  # radius mm
+laser_radius = 1  # radius mm
 
+# We do all the mapping in the 150x150mm space, before final clipping
+# This is so we don't have to deal with the border conditions etc... in a smaller space
+input_image_dimensions = (150, 150)  # mm
+output_image_dimensions = (120, 120)  # mm
+drill_hole_count = (14, 15)
+drill_pitch = (7.2307692308, 7.714)  # mm
+
+# %%
 # 1.1 Calculate the points where the circles will be placed
-x_padding = (bounding_box[0] - (dot_count[0] - 1) * step[0]) / 2
-y_padding = (bounding_box[1] - (dot_count[1] - 1) * step[1]) / 2
+drill_pattern_size = (drill_hole_count[0] - 1) * drill_pitch[0], (drill_hole_count[1] - 1) * drill_pitch[1]
+drill_objpoints = np.mgrid[0:drill_hole_count[0], 0:drill_hole_count[1]].T.reshape(-1, 2)
+drill_objpoints = drill_objpoints * np.array(drill_pitch) + ((np.array(input_image_dimensions) - np.array(drill_pattern_size)) / 2)
+drill_objpoints = drill_objpoints.astype(np.float32)
 
-calibration_objpoints = np.zeros((dot_count[0] * dot_count[1], 3), dtype=np.float32)
-calibration_objpoints[:, :2] = np.mgrid[0:dot_count[0], 0:dot_count[1]].T.reshape(-1, 2)
-calibration_objpoints = calibration_objpoints * np.array([step[0], step[1], 1]) + np.array([x_padding, y_padding, 0])
-calibration_objpoints = calibration_objpoints.astype(np.float32)
+plt.scatter(drill_objpoints[:, 0], drill_objpoints[:, 1])
+plt.show()
 
-# 1.2 Generate the SVG file
+# %%
+# 1.2 Generate a synthetic image of the target
 canvas = svg.SVG(
-    width=f"{bounding_box[0]}mm",
-    height=f"{bounding_box[1]}mm",
-    elements=[
-        svg.Rect(
-            x=0,
-            y=0,
-            width=f"{bounding_box[0]}mm",
-            height=f"{bounding_box[1]}mm",
-            stroke="black",
-            fill="none",
-        ),
-    ],
+    width=f"{output_image_dimensions[0]}mm",
+    height=f"{output_image_dimensions[1]}mm",
+    elements=[],
 )
-for x, y, _ in calibration_objpoints:
+for x, y in drill_objpoints:
     canvas.elements.append(
         svg.Circle(
             cx=f"{x}mm",
             cy=f"{y}mm",
-            r=f"{dot_radius}mm",
-            fill="blue",
+            r=f"{laser_radius}mm",
+            stroke="red",
+            stroke_width=f"{0.05}mm",
         )
     )
 
+# %%
 # 1.3 Save the SVG file
 my_dir = Path(__name__).parent
 build_dir = my_dir / "build"
@@ -166,364 +168,191 @@ with dots_svg.open("w") as f:
 # %%
 latest_scan = latest(build_dir.glob("img*.png"))
 print(f"Using {latest_scan}")
-image = cv.imread(latest_scan)
-
+image = cv2.imread(latest_scan, cv2.IMREAD_UNCHANGED)
+original_scan_size = image.shape[:2]
 scan_mm_to_pixels = get_mm_to_pixels(latest_scan)
-
-# Invert the image
-image = cv.bitwise_not(image)
-# image = cv.rotate(image, cv.ROTATE_180)  # TODO: remove me
 
 display(image)
 print(f"Image size: {image.shape}")
-
-gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+print(f"DPI: {scan_mm_to_pixels * 25.4}")
+print(f"px/mm: {scan_mm_to_pixels}")
 
 # %%
 # Print out the default parameters for the blob detector
 # See: https://stackoverflow.com/questions/39703407/using-findcirclesgrid-in-large-images
-fiber_dots_params = cv.SimpleBlobDetector.Params()
+fiber_dots_params = cv2.SimpleBlobDetector.Params()
 for attr in dir(fiber_dots_params):
     if attr.startswith("_"):
         continue
     print(f"{attr} = {getattr(fiber_dots_params, attr)}")
 
 # Tweak them as required
-def make_params(radius_mm: float, tolerance: float = 0.3, tolerance_abs: int = 0) -> cv.SimpleBlobDetector.Params:
-    params = cv.SimpleBlobDetector.Params()
+def make_params(radius_mm: float, low_tolerance: float = 0.5, high_tolerance: float = 0.1) -> cv2.SimpleBlobDetector.Params:
+    params = cv2.SimpleBlobDetector.Params()
+    params.filterByArea = True
     area_pixels = math.pi * (radius_mm * scan_mm_to_pixels)**2
-    area_range = tolerance * area_pixels
-    params.minArea = int(area_pixels - area_range)
-    params.maxArea = int(area_pixels + area_range)
-    params.minThreshold = max(0, params.minThreshold - tolerance_abs)
-    params.maxThreshold += tolerance_abs
+    params.minArea = int(area_pixels * (1 - low_tolerance))
+    params.maxArea = int(area_pixels * (1 + high_tolerance))
     return params
 
+
 # %%
-# Map the image to our datum coordinate system --------------------------------
-# Finding the position and warping of the scan to the datum points
-datum_objpoints = np.array(
-    [
-        [4.344, 6.197, 0],  # Top left
-        [104.5, 6.072, 0],  # Top right
-        [4.504, 134.072, 0],  # Bottom left
-        [104.66, 133.947, 0],  # Bottom right
+def find_blobs(image: np.ndarray, dot_count: tuple[int, int], radius_mm: float) -> tuple[list[cv2.KeyPoint], cv2.SimpleBlobDetector]:
+    for (low_tol, high_tol), hole_radius in itertools.product([(0.3, 0.2)], [radius_mm]):
+        print(f"Trying {hole_radius=}, {low_tol=}, {high_tol=}")
+        params = make_params(hole_radius, low_tol, high_tol)
+        # params.filterByCircularity = True
+        params.filterByConvexity = False
+        params.maxThreshold = 80
+        params.minThreshold = 0
+        # params.filterByInertia = True
+        detector = cv2.SimpleBlobDetector.create(params)
+        detected_points = detector.detect(image)
+
+        print(f"Found {len(detected_points)} datums")
+        if len(detected_points) >= dot_count[0] * dot_count[1]:
+            break
+
+    return detected_points, detector
+
+inverted = cv2.bitwise_not(cv2.blur(image, (8, 8)))
+# display2(inverted, "inverted")
+detected_drill_points, _ = find_blobs(inverted, drill_hole_count, drill_radius)
+display2(
+    inverted,
+    "detected_points",
+    key_points=detected_drill_points,
+    line_thickness=10,
+    marker_color=(0, 0, 255, 255),
+)
+
+# %%
+# # Draw circles on the image nearby the detected points
+# synthetic_image = image.copy()
+# circle_radius = int(laser_radius * scan_mm_to_pixels)
+# for point in detected_drill_points:
+#     cv2.circle(
+#         synthetic_image,
+#         (
+#             int(point.pt[0] + random.uniform(-1, 1) * scan_mm_to_pixels),
+#             int(point.pt[1] + random.uniform(-1, 1) * scan_mm_to_pixels)
+#         ),
+#         circle_radius,
+#         (0, 0, 0, 255),
+#         2, # int(40 / 1000 * scan_mm_to_pixels),  # 40 micron line width
+#     )
+# display2(synthetic_image, "synthetic_image")
+
+# %%
+def _find_circles(image: np.ndarray, count: int, radius_mm: float) -> tuple[list[cv2.KeyPoint], None]:
+    # Ensure image is grayscale
+    if len(image.shape) > 2:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+
+    # Convert to 8-bit if necessary
+    if gray.dtype != np.uint8:
+        gray = cv2.convertScaleAbs(gray)
+
+    min_dist = int(8 * scan_mm_to_pixels)
+
+    # Try different parameter combinations
+    param_combinations = [
+        # (dp, param1, param2, radius_tolerance)
+        (1, 50, 30, 0.1),  # Original parameters
+        (1, 30, 20, 0.2),  # More lenient
+        (2, 100, 40, 0.15),  # Higher resolution, stricter
+        (1.5, 70, 35, 0.25),  # Balanced approach
     ]
-)
 
-# Datum -> Target transform is a simple translation, because they're aligned in design
-datum_center = np.mean(datum_objpoints, axis=0)
-calibration_target_center = np.array([bounding_box[0] / 2, bounding_box[1] / 2, 0])
-calibration_objpoints_datum_space = calibration_objpoints - calibration_target_center + datum_center
-calibration_objpoints_pixels = (calibration_objpoints_datum_space * scan_mm_to_pixels).astype(np.float32)
-datum_objpoints_pixels = (datum_objpoints * scan_mm_to_pixels).astype(np.float32)
-
-# %%
-# blurred = cv.blur(gray, (20, 20))
-# display2(blurred, "blurred")
-for _t, _r in itertools.product([0.05], [2.2/2]):
-    print(f"Trying radius={_r}, tolerance={_t}")
-    params = make_params(_r, _t)
-    params.filterByArea = True
-    params.filterByCircularity = True
-    params.filterByConvexity = True
-    params.filterByInertia = False
-    detector = cv.SimpleBlobDetector.create(params)
-    detected_points = detector.detect(gray)
-
-    print(f"Found {len(detected_points)} datums")
-    if len(detected_points) != 4:
-        print("Detected points: " + str([point.pt for point in detected_points]))
-    else:
-
-        _img = display2(
-            gray,
-            "detected_points",
-            key_points=detected_points,
-            save_image=False,
-            open_image=False,
-            line_thickness=100,
+    for dp, param1, param2, radius_tolerance in param_combinations:
+        print(f"Trying params: {dp=}, {param1=}, {param2=}, {radius_tolerance=}")
+        circles = cv2.HoughCircles(
+            gray,  # Use the prepared grayscale image
+            cv2.HOUGH_GRADIENT,
+            dp=dp,            # Use the parameter from combinations
+            minDist=min_dist,
+            param1=param1,    # Use the parameter from combinations
+            param2=param2,    # Use the parameter from combinations
+            minRadius=int((radius_mm * (1 - radius_tolerance)) * scan_mm_to_pixels),
+            maxRadius=int((radius_mm * (1 + radius_tolerance)) * scan_mm_to_pixels),
         )
+        detected_count = circles.shape[1] if circles is not None else 0
+        print(f"Found {detected_count} circles.")
+        if detected_count >= count:
+            break
 
-        display(_img)
+    if circles is None:
+        return [], None
 
-        break
+    keypoints = [cv2.KeyPoint(x=c[0], y=c[1], size=c[2]*2) for c in circles[0, :]]
+    return keypoints, None
 
+blur = cv2.bilateralFilter(image, 9, 75, 75)
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+enhanced = clahe.apply(blur)
+# display2(enhanced, "enhanced")
 
 # %%
-datum_imgpoints = np.array([point.pt for point in detected_points], dtype=np.float32)
-# Sort datum points into sectors based on the image quadrants
-height, width = gray.shape
-center_x = width / 2
-center_y = height / 2
+# Take a 10x10mm slice of image centered around the first point
+slice_size = (10 * scan_mm_to_pixels, 10 * scan_mm_to_pixels)
+slice_center = detected_drill_points[0].pt
+slicer = (
+    slice(max(int(slice_center[1] - slice_size[1] / 2), 0), min(int(slice_center[1] + slice_size[1] / 2), enhanced.shape[0])),
+    slice(max(int(slice_center[0] - slice_size[0] / 2), 0), min(int(slice_center[0] + slice_size[0] / 2), enhanced.shape[1]))
+)
+slice_image = enhanced[slicer]
+display(slice_image)
 
-sectors = []
-for point in datum_imgpoints:
-    x, y = point
-    if y < center_y:
-        if x < center_x:
-            sector = 0  # Top left
+# Ensure there's content in the image
+assert slice_image.shape[0] and slice_image.shape[1]
+
+detected_laser_points, _ = _find_circles(slice_image, 1, laser_radius)
+_ = display2(
+    slice_image,
+    "detected_laser_points",
+    key_points=detected_laser_points,
+    line_thickness=5,
+    marker_color=(0, 0, 255, 255),
+)
+
+# %%
+def find_laser_points(
+    image: np.ndarray,
+    expected_locations: list[cv2.KeyPoint],
+    laser_radius_mm: float,
+    slice_size: tuple[int, int] = (10, 10),
+) -> list[cv2.KeyPoint | None]:
+    detected_points = []
+    for point in expected_locations:
+        slice_start = (
+            int(point.pt[0] - slice_size[0] / 2),
+            int(point.pt[1] - slice_size[1] / 2),
+        )
+        slice_image = image[slice_start[1]:slice_start[1] + slice_size[1], slice_start[0]:slice_start[0] + slice_size[0]]
+        slice_points, _ = _find_circles(slice_image, 1, laser_radius_mm)
+
+        def _dist(p1: cv2.KeyPoint, p2: cv2.KeyPoint) -> float:
+            return math.sqrt((p1.pt[0] - p2.pt[0])**2 + (p1.pt[1] - p2.pt[1])**2)
+
+        if len(slice_points) == 0:
+            detected_points.append(None)
+        elif len(slice_points) == 1:
+            detected_points.append(slice_points[0])
         else:
-            sector = 1  # Top right
-    else:
-        if x < center_x:
-            sector = 2  # Bottom left
-        else:
-            sector = 3  # Bottom right
-    sectors.append((sector, point))
+            closest_point = min(slice_points, key=lambda p: _dist(p, point))
+            detected_points.append(closest_point)
 
-# Sort by sector number and extract just the points
-datum_imgpoints = np.array([point for _, point in sorted(sectors)], dtype=np.float32)
+    return detected_points
 
-# %%
-img_to_real_h, _ = cv.findHomography(datum_imgpoints, datum_objpoints_pixels[:, :2])
-corrected_image = cv.warpPerspective(gray, img_to_real_h, gray.shape[::-1])
-
-_corrected_image = display2(
-    corrected_image,
-    "",
-    points=datum_objpoints_pixels[:, :2],
-    point_size=2.2/2 * scan_mm_to_pixels,
-    grid_xs=np.unique(datum_objpoints_pixels[:, 0]),
-    grid_ys=np.unique(datum_objpoints_pixels[:, 1]),
-    save_image=False,
-    open_image=False,
-)
-
-# Find all the laser points on the corrected scan ----------------------------
-params = make_params(dot_radius, 0.1)  # NOTE: the 5% tolerance actually helps, higher is worse
-params.filterByCircularity = False
-params.filterByConvexity = False
-
-found, imgpoints = cv.findCirclesGrid(
-    corrected_image,
-    dot_count,
-    cv.CALIB_CB_SYMMETRIC_GRID,
-    blobDetector=cv.SimpleBlobDetector.create(params),
-)
-
-print(f"Found {len(imgpoints) if imgpoints is not None else 'no'} circles")
-assert found, "Circle processing failed"
-assert len(imgpoints) == dot_count[0] * dot_count[1], "Incorrect number of circles found"
-
-# %%
-# Show the corners we've found
-_corrected_image = display2(
-    _corrected_image,
-    "",
-    points=calibration_objpoints_pixels[:, :2],
-    point_size=dot_radius * scan_mm_to_pixels,
-    marker_color=(255, 0, 0),
-    grid_xs=np.unique(calibration_objpoints_pixels[:, 0]),
-    grid_ys=np.unique(calibration_objpoints_pixels[:, 1]),
-    save_image=False,
-    open_image=False,
-    line_thickness=10,
-)
+detected_laser_points = find_laser_points(inverted, detected_drill_points, laser_radius)
 display2(
-    _corrected_image,
-    "calibration_dots_detected",
-    points=imgpoints.reshape(-1, 2),
-    point_size=dot_radius * scan_mm_to_pixels,
-    line_thickness=10,
+    inverted,
+    "detected_laser_points",
+    key_points=detected_laser_points,
+    line_thickness=5,
+    marker_color=(0, 0, 255, 255),
 )
-
-# %%
-# Find the homography that flattens the board
-h, _ = cv.findHomography(imgpoints, calibration_objpoints_pixels[:, :2])
-unwarped_image = cv.warpPerspective(corrected_image, h, corrected_image.shape[::-1])
-
-# Display a grid overtop the unwarped image to validate it's correct
-circles_xs = np.unique(calibration_objpoints_pixels[:, 0])
-circles_ys = np.unique(calibration_objpoints_pixels[:, 1])
-display2(
-    unwarped_image,
-    "unwarped_image",
-    points=calibration_objpoints_pixels[:, :2],
-    point_size=dot_radius * scan_mm_to_pixels,
-    grid_xs=circles_xs,
-    grid_ys=circles_ys,
-)
-
-# %%
-# Warp a new image into the datum coordinate system ----------------------------
-latest_target = latest(build_dir.glob("target*.png"))
-target_mm_to_pixels = get_mm_to_pixels(latest_target) or scan_mm_to_pixels
-
-assert target_mm_to_pixels == scan_mm_to_pixels, "Target DPI doesn't match"
-
-target_image = cv.imread(latest_target, cv.IMREAD_UNCHANGED)
-display(target_image)
-
-# Warp wrt datum coordinate system
-output_size = (int(bounding_box[0] * target_mm_to_pixels), int(bounding_box[1] * target_mm_to_pixels))
-target_output = cv.warpPerspective(
-    target_image,
-    h,
-    output_size,
-    borderMode=cv.BORDER_CONSTANT,
-    borderValue=(0, 0, 0, 0),
-)
-display(target_output)
-
-cv.imwrite(build_dir / "out-target.png", target_output)
-
-# %%
-# Only do this if you're running laser calibration and have confirmed it works
-# with open(my_dir / "working_homography.pickle", "wb") as f:
-#     pickle.dump(h, f)
-
-# %%
-input_pcb_file = only_one(build_dir.glob("*.kicad_pcb"))
-
-kicad_build_dir = build_dir / "kicad"
-
-# Process SVG outlines for material to be removed
-edge_cuts_file = gen_svg.export_svg(input_pcb_file, "Edge.Cuts", kicad_build_dir)
-top_copper_file = gen_svg.export_svg(input_pcb_file, "F.Cu", kicad_build_dir)
-bottom_copper_file = gen_svg.export_svg(input_pcb_file, "B.Cu", kicad_build_dir)
-mask_file = gen_svg.export_svg(input_pcb_file, "F.Mask", kicad_build_dir)
-paste_file = gen_svg.export_svg(input_pcb_file, "F.Paste", kicad_build_dir)
-
-# %%
-# with open(my_dir / "working_homography.pickle", "rb") as f:
-#     design_to_target_h = pickle.load(f)
-design_to_target_h = h
-
-dpi = 1000
-output_size = (int(bounding_box[0] * dpi / 25.4), int(bounding_box[1] * dpi / 25.4))
-
-def scale_homograph(H: np.ndarray, scale_factor: float) -> np.ndarray:
-    """Scale a homography matrix to work with resized images.
-
-    Args:
-        H: 3x3 homography matrix
-        scale_factor: Factor to scale by (use < 1 for smaller images)
-    """
-    scale_matrix = np.array([
-        [scale_factor, 0, 0],
-        [0, scale_factor, 0],
-        [0, 0, 1]
-    ])
-    return scale_matrix @ H @ np.linalg.inv(scale_matrix)
-
-
-scaled_h = scale_homograph(design_to_target_h, dpi / (target_mm_to_pixels * 25.4))
-
-# %%
-def load_svg_as_mask(svg_path: Path, dpi: float) -> np.ndarray:
-    png_data = cairosvg.svg2png(
-        url=str(svg_path),
-        dpi=dpi,
-        scale=1,
-        background_color="none"
-    )
-
-    image = cv.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv.IMREAD_UNCHANGED)
-
-    # Convert to a binary mask of transparent or not
-    mask = (image[:, :, 3] != 0).astype(np.uint8) * 255
-
-    return mask
-
-
-def stroke_mask(image: np.ndarray, stroke_size: int) -> np.ndarray:
-    # Create a kernel for dilation
-    kernel = np.ones((stroke_size, stroke_size), np.uint8)
-
-    # Ensure the image is a mask
-    if image.dtype != np.uint8:
-        image = image.astype(np.uint8)
-    if image.ndim == 2:
-        mask = image
-    else:
-        mask = image[:, :, 3]
-
-    # Dilate the mask
-    dilated = cv.dilate(mask, kernel, iterations=1)
-
-    # Apply stroke color where dilated but not in original
-    return (dilated != 0) & (image == 0)
-
-
-# Clip the edge cuts mask to the bounding box
-def clip(mask: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
-    return mask[bounds[1]:bounds[1]+bounds[3], bounds[0]:bounds[0]+bounds[2]]
-
-
-edge_cuts_image = load_svg_as_mask(edge_cuts_file, dpi)
-display(edge_cuts_image)
-
-# %%
-# Flood fill edge cuts and expand them by the stroke width
-edge_width = 1  # mm
-edge_cuts_expanded = edge_cuts_image.copy()
-box = cv.boundingRect(edge_cuts_expanded)
-# print(box)
-# display2(clip(edge_cuts_expanded, box))
-
-# %%
-cv.floodFill(
-    edge_cuts_expanded,
-    np.zeros((edge_cuts_expanded.shape[0] + 2, edge_cuts_expanded.shape[1] + 2), dtype=np.uint8),
-    (box[0] + box[2] // 2, box[1] + box[3] // 2),
-    255
-)
-
-stroked = edge_cuts_expanded.copy()
-stroked[stroke_mask(edge_cuts_expanded, int(edge_width * dpi / 25.4))] = 255
-stroked_box = cv.boundingRect(stroked)
-
-# %%
-offset = np.array([-3.931 + 1.3, -0.502 - 3.2]) * dpi / 25.4  # x, y offset
-# offset = np.array([0, 0]) * dpi / 25.4  # x, y offset
-
-def process(svg_path: Path) -> Path:
-    mask = load_svg_as_mask(svg_path, dpi)
-    clipped = clip(mask, stroked_box)
-    rotated = cv.rotate(clipped, cv.ROTATE_90_CLOCKWISE)
-
-    blank = np.ones((output_size[1], output_size[0]), dtype=np.uint8) * 255
-    start_y = int(blank.shape[0] / 2 - rotated.shape[0] / 2 + offset[1])
-    start_x = int(blank.shape[1] / 2 - rotated.shape[1] / 2 + offset[0])
-
-    if start_y < 0:
-        start_y = 0
-        print("Warning: offset is too large, clipping y")
-
-    if start_y + rotated.shape[0] > blank.shape[0]:
-        start_y = blank.shape[0] - rotated.shape[0]
-        print("Warning: offset is too large, clipping y")
-
-    if start_x < 0:
-        start_x = 0
-        print("Warning: offset is too large, clipping x")
-
-    if start_x + rotated.shape[1] > blank.shape[1]:
-        start_x = blank.shape[1] - rotated.shape[1]
-        print("Warning: offset is too large, clipping x")
-
-    blank[
-        start_y:start_y + rotated.shape[0],
-        start_x:start_x + rotated.shape[1],
-    ] = rotated
-
-    warped = cv.warpPerspective(
-        blank,
-        scaled_h,
-        output_size,
-        borderValue=(255, 255, 255),
-    )
-
-    output_dir = build_dir / "shoot"
-    output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / f"{svg_path.stem}.png"
-    cv.imwrite(output_path, warped)
-    return output_path
-
-process(top_copper_file)
-# process(bottom_copper_file)
-# process(mask_file)
-# process(paste_file)
 
 # %%
