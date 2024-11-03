@@ -1,5 +1,4 @@
 # %%
-
 # 1. Generate a grid of circles
 import itertools
 import logging
@@ -288,6 +287,9 @@ def create_svg_grid(points: np.ndarray, radius: float) -> svg.SVG:
         )
     return canvas
 
+
+my_dir = Path(__name__).parent
+build_dir = my_dir / "build"
 # %%
 # General properties
 drill_radius = 0.25  # radius mm
@@ -313,9 +315,6 @@ plt.show()
 # %%
 # Generate a target SVG
 canvas = create_svg_grid(drill_objpoints, laser_radius)
-
-my_dir = Path(__name__).parent
-build_dir = my_dir / "build"
 dots_svg = build_dir / "dots.svg"
 
 with dots_svg.open("w") as f:
@@ -732,14 +731,6 @@ print(f"Saved to {filename}")
 
 
 # %%
-# Save compensation mappers
-import pickle
-
-with (my_dir / "compensation_mappers.pkl").open("wb") as f:
-    pickle.dump(mm_mappers, f)
-
-
-# %%
 point_pairs = list(zip_closest(detected_drill_points, detected_laser_points))
 
 def scatter_point_pairs(point_pairs: list[tuple[cv2.KeyPoint, cv2.KeyPoint]]):
@@ -912,36 +903,35 @@ plot_error_histogram(point_pairs, scan_mm_to_pixels)
 # # %%
 
 # %%
-# Morph an image according to the mapping we've found
-target_dpi = 300
-target_px_per_mm = target_dpi / 25.4
+# # Morph an image according to the mapping we've found
+# target_dpi = 300
+# target_px_per_mm = target_dpi / 25.4
 
-def load_svg_as_gray(svg_path: Path, dpi: float) -> np.ndarray:
-    png_data = cairosvg.svg2png(
-        url=str(svg_path),
-        dpi=dpi,
-        scale=1,
-        background_color="none"
-    )
+# def load_svg_as_gray(svg_path: Path, dpi: float) -> np.ndarray:
+#     png_data = cairosvg.svg2png(
+#         url=str(svg_path),
+#         dpi=dpi,
+#         scale=1,
+#         background_color="none"
+#     )
 
-    image = cv2.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+#     image = cv2.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
 
-    # Return only the alpha channel
-    return image[:, :, 3]
+#     # Return only the alpha channel
+#     return image[:, :, 3]
 
-target_image = load_svg_as_gray(dots_svg, target_dpi)
+# target_image = load_svg_as_gray(dots_svg, target_dpi)
 
+# # %%
+# disp = display2(
+#     target_image,
+#     "target_image",
+#     points=compensated_drill_points * target_px_per_mm,
+#     point_size=drill_radius * target_px_per_mm * 2,
+#     marker_color=(255, 0, 0, 255),
+# )
 # %%
-disp = display2(
-    target_image,
-    "target_image",
-    points=compensated_drill_points * target_px_per_mm,
-    point_size=drill_radius * target_px_per_mm * 2,
-    marker_color=(255, 0, 0, 255),
-)
-
-# %%
-input_grid_width, input_grid_height = int(input_image_dimensions[0] * target_px_per_mm), int(input_image_dimensions[1] * target_px_per_mm)
+calibration_dir = my_dir / "calibrations"
 
 mm_remap_mappers = create_undistortion_mappers(
     [cv2.KeyPoint(p[0], p[1], 1) for p in detected_drill_points_mm],
@@ -949,7 +939,30 @@ mm_remap_mappers = create_undistortion_mappers(
     invert=True,
 )
 
+import calibration_package
+
+cal_pkg = calibration_package.CalibrationPackage(
+    predecessor=None,
+    description="Speed run",
+    compensate_mm_mapper=mm_mappers,
+    remap_mm_mapper=mm_remap_mappers,
+    bounds_mm=((0, 0), input_image_dimensions),
+    target_drill_points=compensated_drill_points,
+    detected_drill_points_mm=detected_drill_points_mm,
+    detected_laser_points_mm=detected_laser_points_mm,
+)
+
+import datetime
+timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+cal_pkg.save(my_dir / "calibrations" / f"{timestamp}-Speed-Run.pkl")
+
 # %%
+# cal_pkg = calibration_package.CalibrationPackage.load(my_dir / "calibrations" / "20241103-Top-Calibration.pkl")
+
+target_dpi = 1200
+target_px_per_mm = target_dpi / 25.4
+input_grid_width, input_grid_height = int(input_image_dimensions[0] * target_px_per_mm), int(input_image_dimensions[1] * target_px_per_mm)
+
 grid_x, grid_y = np.meshgrid(
     np.arange(input_grid_width), np.arange(input_grid_height), indexing='xy'
 )
@@ -958,59 +971,51 @@ grid_points_x = grid_x.ravel() / target_px_per_mm
 grid_points_y = grid_y.ravel() / target_px_per_mm
 
 # Compute the mapping arrays using the forward RBF interpolators
-map_inverse_x = mm_remap_mappers[0](grid_points_x, grid_points_y).reshape(input_grid_height, input_grid_width).astype(np.float32) * target_px_per_mm
-map_inverse_y = mm_remap_mappers[1](grid_points_x, grid_points_y).reshape(input_grid_height, input_grid_width).astype(np.float32) * target_px_per_mm
+map_inverse_x = cal_pkg.remap_mm_mapper[0](grid_points_x, grid_points_y).reshape(input_grid_height, input_grid_width).astype(np.float32) * target_px_per_mm
+map_inverse_y = cal_pkg.remap_mm_mapper[1](grid_points_x, grid_points_y).reshape(input_grid_height, input_grid_width).astype(np.float32) * target_px_per_mm
 
 # Clip the mapping arrays to valid ranges to avoid invalid indices
 map_inverse_x = np.clip(map_inverse_x, 0, input_grid_width - 1)
 map_inverse_y = np.clip(map_inverse_y, 0, input_grid_height - 1)
 
 # %%
-# Reshape the mappings back to the grid shape
-restored_image = cv2.remap(
-    target_image,
-    map_inverse_x,
-    map_inverse_y,
-    interpolation=cv2.INTER_LINEAR,
-    borderMode=cv2.BORDER_CONSTANT
-)
+for target_image_path in (build_dir / "targets").glob("*.png"):
+    target_image = cv2.imread(target_image_path, cv2.IMREAD_UNCHANGED)
+
+    target_image = cv2.resize(target_image, (input_grid_height, input_grid_width), interpolation=cv2.INTER_AREA)
+    target_image = cv2.cvtColor(target_image, cv2.COLOR_BGRA2GRAY)
+    target_image = cv2.bitwise_not(target_image)
+
+    # Reshape the mappings back to the grid shape
+    restored_image = cv2.remap(
+        target_image,
+        map_inverse_x,
+        map_inverse_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT
+    )
+
+    output_image_width = int(output_image_dimensions[0] * target_px_per_mm)
+    output_image_height = int(output_image_dimensions[1] * target_px_per_mm)
+    width_start = (restored_image.shape[1] - output_image_width) // 2
+    height_start = (restored_image.shape[0] - output_image_height) // 2
+    restored_image = restored_image[height_start:height_start+output_image_height, width_start:width_start+output_image_width]
+
+    cv2.imwrite(target_image_path.with_suffix(".restored.png"), restored_image)
 
 # %%
 # Display both the restored image and target together
-both = np.zeros((input_grid_height, input_grid_width, 3), dtype=np.uint8)
-both[:, :, 0] = restored_image
-both[:, :, 1] = target_image
+# First ensure both images have the same dimensions
+target_shape = target_image.shape[:2]
+restored_shape = restored_image.shape[:2]
+
+# Resize restored_image to match target_image dimensions
+restored_resized = cv2.resize(restored_image, (target_shape[1], target_shape[0]))
+
+both = np.zeros((target_shape[0], target_shape[1], 4), dtype=np.uint8)
+both[:, :, 3] = 255
+both[:, :, 0] = cv2.cvtColor(restored_resized, cv2.COLOR_BGRA2GRAY)
+both[:, :, 1] = cv2.cvtColor(target_image, cv2.COLOR_BGRA2GRAY)
 display2(both)
-
-# %%
-import dataclasses
-
-@dataclasses.dataclass
-class CompensationPackage:
-    predecessor: str | None
-    description: str
-    compensate_mm_mapper: tuple[Rbf, Rbf]
-    remap_mm_mapper: tuple[Rbf, Rbf]
-    bounds_mm: tuple[tuple[float, float], tuple[float, float]]
-    target_drill_points: np.ndarray
-    detected_drill_points_mm: np.ndarray
-    detected_laser_points_mm: np.ndarray
-
-# %%
-comp_package_1 = CompensationPackage(
-    predecessor=None,
-    description="20241103-Top-Compensation",
-    compensate_mm_mapper=mm_mappers,
-    remap_mm_mapper=mm_remap_mappers,
-    bounds_mm=((0, 0), (input_image_dimensions[0], input_image_dimensions[1])),
-    target_drill_points=drill_objpoints,
-    detected_drill_points_mm=detected_drill_points_mm,
-    detected_laser_points_mm=detected_laser_points_mm,
-)
-
-calibration_dir = my_dir / "calibrations"
-calibration_dir.mkdir(exist_ok=True)
-with (calibration_dir / f"{comp_package_1.description}.pkl").open("wb") as f:
-    pickle.dump(comp_package_1, f)
 
 # %%
