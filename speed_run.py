@@ -219,7 +219,7 @@ def order_points_into_grid(points: np.ndarray, grid_size: tuple[int, int]) -> np
 def create_undistortion_mappers(
     detected_points: list[cv2.KeyPoint | None],
     expected_points: list[cv2.KeyPoint],
-    detected_to_expected: bool = False,
+    invert: bool = False,
     function: str = "cubic",
 ) -> tuple[Rbf, Rbf]:
     # Filter out None values and create arrays of corresponding points
@@ -234,7 +234,7 @@ def create_undistortion_mappers(
     valid_detected = np.array(valid_detected)
     valid_expected = np.array(valid_expected)
 
-    if detected_to_expected:
+    if invert:
         # Map from detected (laser) positions to expected (drill) positions
         rbf_dx = Rbf(valid_detected[:, 0], valid_detected[:, 1], valid_expected[:, 0], function=function)
         rbf_dy = Rbf(valid_detected[:, 0], valid_detected[:, 1], valid_expected[:, 1], function=function)
@@ -782,4 +782,204 @@ scatter_point_pairs(point_pairs)
 plot_error_histogram(point_pairs, scan_mm_to_pixels)
 
 # %%
-# Morph and remap SVG and images
+# Morph and remap PCB images
+# %%
+# import gen_svg
+# input_pcb_file = only_one(build_dir.glob("*.kicad_pcb"))
+
+# kicad_build_dir = build_dir / "kicad"
+
+# # Process SVG outlines for material to be removed
+# edge_cuts_file = gen_svg.export_svg(input_pcb_file, "Edge.Cuts", kicad_build_dir)
+# top_copper_file = gen_svg.export_svg(input_pcb_file, "F.Cu", kicad_build_dir)
+# bottom_copper_file = gen_svg.export_svg(input_pcb_file, "B.Cu", kicad_build_dir)
+# mask_file = gen_svg.export_svg(input_pcb_file, "F.Mask", kicad_build_dir)
+# paste_file = gen_svg.export_svg(input_pcb_file, "F.Paste", kicad_build_dir)
+
+# # %%
+# dpi = 1000
+# def load_svg_as_gray(svg_path: Path, dpi: float) -> np.ndarray:
+#     png_data = cairosvg.svg2png(
+#         url=str(svg_path),
+#         dpi=dpi,
+#         scale=1,
+#         background_color="none"
+#     )
+
+#     image = cv2.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+
+#     # Return only the alpha channel
+#     return image[:, :, 3]
+
+# display(load_svg_as_gray(edge_cuts_file, dpi))
+
+# # %%
+# def stroke_mask(image: np.ndarray, stroke_size: int) -> np.ndarray:
+#     # Create a kernel for dilation
+#     kernel = np.ones((stroke_size, stroke_size), np.uint8)
+
+#     assert image.dtype == np.uint8
+#     assert image.ndim == 2
+#     # Dilate the mask
+#     dilated = cv2.dilate(image, kernel, iterations=1)
+
+#     # Apply stroke color where dilated but not in original
+#     return (dilated != 0) & (image == 0)
+
+# display(stroke_mask(load_svg_as_gray(edge_cuts_file, dpi), 20))
+
+# # %%
+# # Clip the edge cuts mask to the bounding box
+# def clip(mask: np.ndarray, bounds: tuple[int, int, int, int]) -> np.ndarray:
+#     return mask[bounds[1]:bounds[1]+bounds[3], bounds[0]:bounds[0]+bounds[2]]
+
+# # %%
+# def flood_fill_center(mask: np.ndarray, color: int) -> np.ndarray:
+#     assert mask.dtype == np.uint8
+#     assert mask.ndim == 2
+
+#     mask = mask.copy()
+#     h, w = mask.shape[:2]
+
+#     # Create a mask that's 2 pixels larger in each dimension
+#     flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+
+#     box = cv2.boundingRect(mask)
+
+#     cv2.floodFill(
+#         image=mask,
+#         mask=flood_mask,  # Properly sized mask
+#         seedPoint=(box[0] + box[2] // 2, box[1] + box[3] // 2),
+#         newVal=color,
+#     )
+
+#     return mask
+
+# display(flood_fill_center(load_svg_as_gray(edge_cuts_file, dpi), 255))
+
+# # %%
+# offset = np.array([-3.931 + 1.3, -0.502 - 3.2]) * dpi / 25.4  # x, y offset
+# # offset = np.array([0, 0]) * dpi / 25.4  # x, y offset
+
+# def process(svg_path: Path) -> Path:
+#     mask = load_svg_as_mask(svg_path, dpi)
+#     clipped = clip(mask, stroked_box)
+#     rotated = cv2.rotate(clipped, cv2.ROTATE_90_CLOCKWISE)
+
+#     blank = np.ones((output_size[1], output_size[0]), dtype=np.uint8) * 255
+#     start_y = int(blank.shape[0] / 2 - rotated.shape[0] / 2 + offset[1])
+#     start_x = int(blank.shape[1] / 2 - rotated.shape[1] / 2 + offset[0])
+
+#     if start_y < 0:
+#         start_y = 0
+#         print("Warning: offset is too large, clipping y")
+
+#     if start_y + rotated.shape[0] > blank.shape[0]:
+#         start_y = blank.shape[0] - rotated.shape[0]
+#         print("Warning: offset is too large, clipping y")
+
+#     if start_x < 0:
+#         start_x = 0
+#         print("Warning: offset is too large, clipping x")
+
+#     if start_x + rotated.shape[1] > blank.shape[1]:
+#         start_x = blank.shape[1] - rotated.shape[1]
+#         print("Warning: offset is too large, clipping x")
+
+#     blank[
+#         start_y:start_y + rotated.shape[0],
+#         start_x:start_x + rotated.shape[1],
+#     ] = rotated
+
+#     warped = cv2.warpPerspective(
+#         blank,
+#         scaled_h,
+#         output_size,
+#         borderValue=(255, 255, 255),
+#     )
+
+#     output_dir = build_dir / "shoot"
+#     output_dir.mkdir(exist_ok=True)
+#     output_path = output_dir / f"{svg_path.stem}.png"
+#     cv2.imwrite(output_path, warped)
+#     return output_path
+
+# process(top_copper_file)
+# # process(bottom_copper_file)
+# # process(mask_file)
+# # process(paste_file)
+
+# # %%
+
+# %%
+# Morph an image according to the mapping we've found
+target_dpi = 300
+target_px_per_mm = target_dpi / 25.4
+
+def load_svg_as_gray(svg_path: Path, dpi: float) -> np.ndarray:
+    png_data = cairosvg.svg2png(
+        url=str(svg_path),
+        dpi=dpi,
+        scale=1,
+        background_color="none"
+    )
+
+    image = cv2.imdecode(np.frombuffer(png_data, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+
+    # Return only the alpha channel
+    return image[:, :, 3]
+
+target_image = load_svg_as_gray(dots_svg, target_dpi)
+
+# %%
+disp = display2(
+    target_image,
+    "target_image",
+    points=compensated_drill_points * target_px_per_mm,
+    point_size=drill_radius * target_px_per_mm * 2,
+    marker_color=(255, 0, 0, 255),
+)
+
+# %%
+input_grid_width, input_grid_height = int(input_image_dimensions[0] * target_px_per_mm), int(input_image_dimensions[1] * target_px_per_mm)
+
+mm_remap_mappers = create_undistortion_mappers(
+    [cv2.KeyPoint(p[0], p[1], 1) for p in detected_drill_points_mm],
+    [cv2.KeyPoint(p[0], p[1], 1) for p in detected_laser_points_mm],
+    invert=True,
+)
+
+# %%
+grid_x, grid_y = np.meshgrid(
+    np.arange(input_grid_width), np.arange(input_grid_height), indexing='xy'
+)
+
+grid_points_x = grid_x.ravel() / target_px_per_mm
+grid_points_y = grid_y.ravel() / target_px_per_mm
+
+# Compute the mapping arrays using the forward RBF interpolators
+map_inverse_x = mm_remap_mappers[0](grid_points_x, grid_points_y).reshape(input_grid_height, input_grid_width).astype(np.float32) * target_px_per_mm
+map_inverse_y = mm_remap_mappers[1](grid_points_x, grid_points_y).reshape(input_grid_height, input_grid_width).astype(np.float32) * target_px_per_mm
+
+# Clip the mapping arrays to valid ranges to avoid invalid indices
+map_inverse_x = np.clip(map_inverse_x, 0, input_grid_width - 1)
+map_inverse_y = np.clip(map_inverse_y, 0, input_grid_height - 1)
+
+# %%
+# Reshape the mappings back to the grid shape
+restored_image = cv2.remap(
+    target_image,
+    map_inverse_x,
+    map_inverse_y,
+    interpolation=cv2.INTER_LINEAR,
+    borderMode=cv2.BORDER_CONSTANT
+)
+
+# %%
+# Display both the restored image and target together
+both = np.zeros((input_grid_height, input_grid_width, 3), dtype=np.uint8)
+both[:, :, 0] = restored_image
+both[:, :, 1] = target_image
+display2(both)
+
+# %%
