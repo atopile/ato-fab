@@ -7,7 +7,7 @@ import math
 import os
 import subprocess
 from pathlib import Path
-from typing import Iterable
+from typing import Generator, Iterable
 
 import cv2
 import matplotlib.pyplot as plt
@@ -736,5 +736,78 @@ import pickle
 
 with (my_dir / "compensation_mappers.pkl").open("wb") as f:
     pickle.dump(mm_mappers, f)
+
+
+# %%
+def zip_closest(
+    keypoints1: list[cv2.KeyPoint], keypoints2: list[cv2.KeyPoint]
+) -> Generator[tuple[cv2.KeyPoint, cv2.KeyPoint], None, None]:
+    def _dist(p1: cv2.KeyPoint, p2: cv2.KeyPoint) -> float:
+        return math.sqrt((p1.pt[0] - p2.pt[0])**2 + (p1.pt[1] - p2.pt[1])**2)
+
+    keypoints2 = keypoints2.copy()
+    for kp1 in keypoints1:
+        closest_kp2 = min(keypoints2, key=lambda kp2: _dist(kp1, kp2))
+        yield kp1, closest_kp2
+        keypoints2.remove(closest_kp2)
+
+point_pairs = list(zip_closest(detected_drill_points, detected_laser_points))
+
+plt.scatter(
+    [p[0].pt[0] for p in point_pairs],
+    [p[0].pt[1] for p in point_pairs],
+    color="blue",
+    s=3,
+)
+
+for i, p in enumerate(point_pairs):
+    plt.annotate(
+        f"{i}",
+        xy=(p[0].pt[0], p[0].pt[1]),
+        xytext=(p[0].pt[0] + 1, p[0].pt[1] + 1),
+        color="blue",
+    )
+
+plt.scatter(
+    [p[1].pt[0] for p in point_pairs],
+    [p[1].pt[1] for p in point_pairs],
+    color="red",
+    s=3,
+)
+
+for i, p in enumerate(point_pairs):
+    plt.annotate(
+        f"{i}",
+        xy=(p[1].pt[0], p[1].pt[1]),
+        xytext=(p[1].pt[0] + 1, p[1].pt[1] + 1),
+        color="red",
+    )
+
+plt.gca().invert_yaxis()
+plt.show()
+
+# %%
+def plot_error_histogram(point_pairs: list[tuple[cv2.KeyPoint, cv2.KeyPoint]], scale: float):
+    error = np.array([np.array(p1.pt) - np.array(p2.pt) for p1, p2 in point_pairs]) / scale
+    plt.hist2d(
+        error[:, 0],
+        error[:, 1],
+        bins=20,
+        cmap='viridis',
+        density=True
+    )
+    plt.colorbar(label='Density')
+    plt.title("Error in mm")
+    plt.axhline(y=0, color='k', linestyle='--', alpha=0.3)
+    plt.axvline(x=0, color='k', linestyle='--', alpha=0.3)
+    plt.xlabel('X Error (mm)')
+    plt.ylabel('Y Error (mm)')
+    x_range = max(abs(np.min(error[:, 0])), abs(np.max(error[:, 0])))
+    y_range = max(abs(np.min(error[:, 1])), abs(np.max(error[:, 1])))
+
+    plt.axis([-x_range, x_range, -y_range, y_range])
+    plt.show()
+
+plot_error_histogram(point_pairs, scan_mm_to_pixels)
 
 # %%
