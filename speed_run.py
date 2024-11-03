@@ -130,6 +130,164 @@ def get_mm_to_pixels(image_path: Path) -> float | None:
         return None
     return info["dpi"][0] / 25.4
 
+def zip_closest(
+    keypoints1: list[cv2.KeyPoint], keypoints2: list[cv2.KeyPoint]
+) -> Generator[tuple[cv2.KeyPoint, cv2.KeyPoint], None, None]:
+    def _dist(p1: cv2.KeyPoint, p2: cv2.KeyPoint) -> float:
+        return math.sqrt((p1.pt[0] - p2.pt[0])**2 + (p1.pt[1] - p2.pt[1])**2)
+
+    keypoints2 = keypoints2.copy()
+    for kp1 in keypoints1:
+        closest_kp2 = min(keypoints2, key=lambda kp2: _dist(kp1, kp2))
+        yield kp1, closest_kp2
+        keypoints2.remove(closest_kp2)
+
+def plot_error_histogram(point_pairs: list[tuple[cv2.KeyPoint, cv2.KeyPoint]], scale: float):
+    error = np.array([np.array(p1.pt) - np.array(p2.pt) for p1, p2 in point_pairs]) / scale
+    plt.hist2d(
+        error[:, 0],
+        error[:, 1],
+        bins=20,
+        cmap='viridis',
+        density=True
+    )
+    plt.colorbar(label='Density')
+    plt.title("Error in mm")
+    plt.axhline(y=0, color='k', linestyle='--', alpha=0.3)
+    plt.axvline(x=0, color='k', linestyle='--', alpha=0.3)
+    plt.xlabel('X Error (mm)')
+    plt.ylabel('Y Error (mm)')
+    x_range = max(abs(np.min(error[:, 0])), abs(np.max(error[:, 0])))
+    y_range = max(abs(np.min(error[:, 1])), abs(np.max(error[:, 1])))
+
+    plt.axis([-x_range, x_range, -y_range, y_range])
+    plt.show()
+
+def plot_enumerate_points(points: np.ndarray, image: np.ndarray | None = None):
+    if image is not None:
+        plt.imshow(image)
+
+    plt.scatter(
+        points[:, 0],
+        points[:, 1],
+        color="red",
+        s=5,
+    )
+
+    for i, p in enumerate(points):
+        plt.annotate(
+            f"{i}",
+            xy=(p[0], p[1]),
+            xytext=(p[0] + 10, p[1] + 10),
+            color="red",
+            fontsize=6,
+        )
+
+    plt.show()
+
+def keypoints_to_array(keypoints: list[cv2.KeyPoint]) -> np.ndarray:
+    return np.array([[keypoint.pt[0], keypoint.pt[1]] for keypoint in keypoints])
+
+def order_points_into_grid(points: np.ndarray, grid_size: tuple[int, int]) -> np.ndarray:
+    """Orders points into a grid starting from top-left, going right then down.
+
+    Args:
+        points: Numpy array of shape (N, 2) containing point coordinates
+        grid_size: Tuple of (rows, cols) for the expected grid
+
+    Returns:
+        Numpy array of shape (N, 2) with points ordered in row-major order
+        (left-to-right, top-to-bottom)
+    """
+    # Find approximate row and column divisions
+    y_coords = points[:, 1]
+
+    # Use percentile-based clustering to find rows
+    row_indices = np.argsort(y_coords)
+    rows = np.array_split(row_indices, grid_size[0])
+
+    # Sort each row by x coordinate
+    ordered_points = []
+    for row in rows:
+        # Sort points in this row by x coordinate
+        row_points = points[row]
+        sorted_row = row_points[np.argsort(row_points[:, 0])]
+        ordered_points.extend(sorted_row)
+
+    return np.array(ordered_points)
+
+def create_undistortion_mappers(
+    detected_points: list[cv2.KeyPoint | None],
+    expected_points: list[cv2.KeyPoint],
+    detected_to_expected: bool = False,
+    function: str = "cubic",
+) -> tuple[Rbf, Rbf]:
+    # Filter out None values and create arrays of corresponding points
+    valid_detected = []
+    valid_expected = []
+
+    for detected, expected in zip(detected_points, expected_points):
+        if detected is not None:
+            valid_detected.append([detected.pt[0], detected.pt[1]])
+            valid_expected.append([expected.pt[0], expected.pt[1]])
+
+    valid_detected = np.array(valid_detected)
+    valid_expected = np.array(valid_expected)
+
+    if detected_to_expected:
+        # Map from detected (laser) positions to expected (drill) positions
+        rbf_dx = Rbf(valid_detected[:, 0], valid_detected[:, 1], valid_expected[:, 0], function=function)
+        rbf_dy = Rbf(valid_detected[:, 0], valid_detected[:, 1], valid_expected[:, 1], function=function)
+    else:
+        # Map from expected (drill) positions to detected (laser) positions
+        rbf_dx = Rbf(valid_expected[:, 0], valid_expected[:, 1], valid_detected[:, 0], function=function)
+        rbf_dy = Rbf(valid_expected[:, 0], valid_expected[:, 1], valid_detected[:, 1], function=function)
+
+    return rbf_dx, rbf_dy
+
+def transform_points(points: np.ndarray, homography: np.ndarray | None = None, mappers: tuple[Rbf, Rbf] | None = None) -> np.ndarray:
+    if homography is not None:
+        return cv2.perspectiveTransform(
+            points.reshape(-1, 1, 2),  # Reshape to (N, 1, 2)
+            homography,
+        ).reshape(-1, 2)
+
+    elif mappers is not None:
+        x_mapped = mappers[0](points[:, 0], points[:, 1])
+        y_mapped = mappers[1](points[:, 0], points[:, 1])
+        return np.column_stack((x_mapped, y_mapped))
+
+    raise ValueError("Either homography or mappers must be provided")
+
+def create_svg_grid(points: np.ndarray, radius: float) -> svg.SVG:
+    canvas = svg.SVG(
+        width=f"{input_image_dimensions[0]}mm",
+        height=f"{input_image_dimensions[1]}mm",
+        elements=[
+            svg.Rect(
+                x=0,
+                y=0,
+                width=f"{input_image_dimensions[0]}mm",
+                height=f"{input_image_dimensions[1]}mm",
+                stroke="black",
+                stroke_width=f"{0.05}mm",
+                fill="none",
+            ),
+        ],
+    )
+    for x, y in points:
+        canvas.elements.append(
+            svg.Circle(
+                cx=f"{x}mm",
+                cy=f"{y}mm",
+                r=f"{radius}mm",
+                stroke="red",
+                stroke_width=f"{0.05}mm",
+                fill="none",
+            )
+        )
+    return canvas
+
 # %%
 # General properties
 drill_radius = 0.25  # radius mm
@@ -153,30 +311,9 @@ plt.scatter(drill_objpoints[:, 0], drill_objpoints[:, 1])
 plt.show()
 
 # %%
-# 1.2 Generate a synthetic image of the target
-def create_svg_grid(points: np.ndarray, radius: float) -> svg.SVG:
-    canvas = svg.SVG(
-        width=f"{output_image_dimensions[0]}mm",
-        height=f"{output_image_dimensions[1]}mm",
-        elements=[],
-    )
-    for x, y in points:
-        canvas.elements.append(
-            svg.Circle(
-                cx=f"{x}mm",
-                cy=f"{y}mm",
-                r=f"{radius}mm",
-                stroke="red",
-                stroke_width=f"{0.05}mm",
-                fill="none",
-            )
-        )
-    return canvas
-
+# Generate a target SVG
 canvas = create_svg_grid(drill_objpoints, laser_radius)
 
-# %%
-# 1.3 Save the SVG file
 my_dir = Path(__name__).parent
 build_dir = my_dir / "build"
 dots_svg = build_dir / "dots.svg"
@@ -237,13 +374,13 @@ def find_blobs(image: np.ndarray, dot_count: tuple[int, int], radius_mm: float) 
 inverted = cv2.bitwise_not(cv2.blur(image, (8, 8)))
 # display2(inverted, "inverted")
 detected_drill_points, detector = find_blobs(inverted, drill_hole_count, drill_radius)
-display2(
-    inverted,
-    "detected_points",
-    key_points=detected_drill_points,
-    line_thickness=10,
-    marker_color=(0, 0, 255, 255),
-)
+# display2(
+#     inverted,
+#     "detected_points",
+#     key_points=detected_drill_points,
+#     line_thickness=10,
+#     marker_color=(0, 0, 255, 255),
+# )
 
 # %%
 def _find_circles(image: np.ndarray, count: int, radius_mm: float) -> tuple[list[cv2.KeyPoint], None]:
@@ -405,98 +542,9 @@ _ = display2(
 )
 
 # %%
-# def create_undistortion_maps(
-#     rbf_x: Rbf,
-#     rbf_y: Rbf,
-#     image_shape: tuple[int, int],
-# ) -> tuple[np.ndarray, np.ndarray]:
-#     # Generate grid over the distorted image
-#     grid_y, grid_x = np.mgrid[0:image_shape[0], 0:image_shape[1]]
-#     grid_points_x = grid_x.ravel()
-#     grid_points_y = grid_y.ravel()
-
-#     # Compute the source coordinates using the RBF interpolators
-#     map_x = rbf_x(grid_points_x, grid_points_y)
-#     map_y = rbf_y(grid_points_x, grid_points_y)
-
-#     # Reshape the mappings back to the grid shape
-#     map_x = map_x.reshape(image_shape).astype(np.float32)
-#     map_y = map_y.reshape(image_shape).astype(np.float32)
-
-#     # Clip the mapping arrays to valid ranges
-#     map_x = np.clip(map_x, 0, image_shape[1] - 1)
-#     map_y = np.clip(map_y, 0, image_shape[0] - 1)
-
-#     return map_x, map_y
-
-# %%
-image_dpi = 300
-
-def scale_keypoints(keypoints: list[cv2.KeyPoint | None], scale: float) -> list[cv2.KeyPoint | None]:
-    # TODO: handle None keypoints
-    return [
-        cv2.KeyPoint(
-            x=keypoint.pt[0] * scale,
-            y=keypoint.pt[1] * scale,
-            size=keypoint.size * scale,
-        )
-        for keypoint in keypoints
-    ]
-
-
-def keypoints_to_array(keypoints: list[cv2.KeyPoint]) -> np.ndarray:
-    return np.array([[keypoint.pt[0], keypoint.pt[1]] for keypoint in keypoints])
-
-
-def order_points_into_grid(points: np.ndarray, grid_size: tuple[int, int]) -> np.ndarray:
-    """Orders points into a grid starting from top-left, going right then down.
-
-    Args:
-        points: Numpy array of shape (N, 2) containing point coordinates
-        grid_size: Tuple of (rows, cols) for the expected grid
-
-    Returns:
-        Numpy array of shape (N, 2) with points ordered in row-major order
-        (left-to-right, top-to-bottom)
-    """
-    # Find approximate row and column divisions
-    y_coords = points[:, 1]
-
-    # Use percentile-based clustering to find rows
-    row_indices = np.argsort(y_coords)
-    rows = np.array_split(row_indices, grid_size[0])
-
-    # Sort each row by x coordinate
-    ordered_points = []
-    for row in rows:
-        # Sort points in this row by x coordinate
-        row_points = points[row]
-        sorted_row = row_points[np.argsort(row_points[:, 0])]
-        ordered_points.extend(sorted_row)
-
-    return np.array(ordered_points)
-
 ordered_detected_drill_points = order_points_into_grid(keypoints_to_array(detected_drill_points), drill_hole_count)
 
-def enumerate_points(image, points):
-    plt.imshow(image)
-    plt.scatter(
-        points[:, 0],
-        points[:, 1],
-        color="red",
-        s=5,
-    )
-    for i, p in enumerate(points):
-        plt.annotate(
-            f"{i}",
-            xy=(p[0], p[1]),
-            xytext=(p[0] + 10, p[1] + 10),
-            color="red",
-            fontsize=6,
-        )
-    plt.show()
-
-enumerate_points(image, ordered_detected_drill_points)
+plot_enumerate_points(ordered_detected_drill_points, image)
 
 # %%
 ordered_drill_objpoints = order_points_into_grid(drill_objpoints, drill_hole_count)
@@ -506,15 +554,9 @@ obj_to_img_homography, _ = cv2.findHomography(
 )
 print(obj_to_img_homography)
 
-def transform_points(points: np.ndarray, homography: np.ndarray) -> np.ndarray:
-    return cv2.perspectiveTransform(
-        points.reshape(-1, 1, 2),  # Reshape to (N, 1, 2)
-        homography,
-    ).reshape(-1, 2)
+plot_enumerate_points(transform_points(drill_objpoints, obj_to_img_homography), image)
 
-enumerate_points(image, transform_points(drill_objpoints, obj_to_img_homography))
 
-# %%
 img_to_obj_homography, _ = cv2.findHomography(
     ordered_detected_drill_points,
     ordered_drill_objpoints,
@@ -533,34 +575,6 @@ display(display2(
     marker_color=(0, 255, 0, 255),
 ))
 # %%
-def create_undistortion_mappers(
-    detected_points: list[cv2.KeyPoint | None],
-    expected_points: list[cv2.KeyPoint],
-    detected_to_expected: bool = False,
-) -> tuple[Rbf, Rbf]:
-    # Filter out None values and create arrays of corresponding points
-    valid_detected = []
-    valid_expected = []
-
-    for detected, expected in zip(detected_points, expected_points):
-        if detected is not None:
-            valid_detected.append([detected.pt[0], detected.pt[1]])
-            valid_expected.append([expected.pt[0], expected.pt[1]])
-
-    valid_detected = np.array(valid_detected)
-    valid_expected = np.array(valid_expected)
-
-    if detected_to_expected:
-        # Map from detected (laser) positions to expected (drill) positions
-        rbf_dx = Rbf(valid_detected[:, 0], valid_detected[:, 1], valid_expected[:, 0], function='cubic')
-        rbf_dy = Rbf(valid_detected[:, 0], valid_detected[:, 1], valid_expected[:, 1], function='cubic')
-    else:
-        # Map from expected (drill) positions to detected (laser) positions
-        rbf_dx = Rbf(valid_expected[:, 0], valid_expected[:, 1], valid_detected[:, 0], function='cubic')
-        rbf_dy = Rbf(valid_expected[:, 0], valid_expected[:, 1], valid_detected[:, 1], function='cubic')
-
-    return rbf_dx, rbf_dy
-
 detected_drill_points_mm = transform_points(keypoints_to_array(detected_drill_points), img_to_obj_homography)
 
 detected_laser_points_mm = transform_points(
@@ -568,18 +582,14 @@ detected_laser_points_mm = transform_points(
     img_to_obj_homography,
 )
 
+# zipped_points = list(zip_closest(detected_drill_points_mm, detected_laser_points_mm))
+
 mm_mappers = create_undistortion_mappers(
     [cv2.KeyPoint(p[0], p[1], 1) for p in detected_drill_points_mm],
     [cv2.KeyPoint(p[0], p[1], 1) for p in detected_laser_points_mm],
 )
 
-compensated_drill_points = np.array([
-    [
-        mm_mappers[0](point[0], point[1]),
-        mm_mappers[1](point[0], point[1]),
-    ]
-    for point in drill_objpoints
-])
+compensated_drill_points = transform_points(drill_objpoints, mappers=mm_mappers)
 
 n_points = None
 plt.scatter(
@@ -627,77 +637,81 @@ for i, p in enumerate(compensated_drill_points[:n_points]):
         color="blue",
     )
 
-# plt.legend(["original", "transformed", "compensated"])
+plt.legend(["original", "transformed", "compensated"], loc="lower center", bbox_to_anchor=(0.5, -0.15), ncol=3)
 plt.gca().invert_yaxis()
 # plt.axis([0, input_image_dimensions[0], input_image_dimensions[1], 0])
 
 plt.show()
 
 # %%
-drill_color = (0, 255, 0, 255)
-laser_color = (255, 0, 0, 255)
-target_color = (255, 0, 255, 255)
-compensated_color = (0, 0, 255, 255)
+def display_compensation(image: np.ndarray, open_image: bool = False):
+    drill_color = (0, 255, 0, 255)
+    laser_color = (255, 0, 0, 255)
+    target_color = (255, 0, 255, 255)
+    compensated_color = (0, 0, 255, 255)
 
-disp = display2(
-    image,
-    "",
-    points=transform_points(compensated_drill_points, obj_to_img_homography),
-    point_size=detected_drill_points[0].size / 2,
-    marker_color=compensated_color,
-    save_image=False,
-    open_image=False,
-    line_thickness=5,
-)
-lines = [
-    ("compensated", compensated_color),
-    ("target", target_color),
-    ("laser dots", laser_color),
-    ("drill dots", drill_color),
-]
+    disp = display2(
+        image,
+        "",
+        points=transform_points(compensated_drill_points, obj_to_img_homography),
+        point_size=detected_drill_points[0].size / 2,
+        marker_color=compensated_color,
+        save_image=False,
+        open_image=False,
+        line_thickness=5,
+    )
+    lines = [
+        ("compensated", compensated_color),
+        ("target", target_color),
+        ("laser dots", laser_color),
+        ("drill dots", drill_color),
+    ]
 
-for i, (text, color) in enumerate(lines):
-    cv2.putText(
+    for i, (text, color) in enumerate(lines):
+        cv2.putText(
+            disp,
+            text,
+            (10, 200 + i * 200),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=10,
+            color=color,
+            thickness=10,
+        )
+
+    disp = display2(
         disp,
-        text,
-        (10, 200 + i * 200),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        fontScale=10,
-        color=color,
-        thickness=10,
+        "",
+        points=transform_points(detected_drill_points_mm, obj_to_img_homography),
+        point_size=detected_drill_points[0].size / 2,
+        marker_color=drill_color,
+        save_image=False,
+        open_image=False,
+        line_thickness=5,
+    )
+    disp = display2(
+        disp,
+        "",
+        points=transform_points(drill_objpoints, obj_to_img_homography),
+        point_size=detected_drill_points[0].size / 2,
+        marker_color=target_color,
+        line_thickness=5,
+        save_image=False,
+        open_image=False,
+    )
+    disp = display2(
+        disp,
+        "compensated_points",
+        points=transform_points(detected_laser_points_mm, obj_to_img_homography),
+        point_size=detected_drill_points[0].size / 2,
+        marker_color=laser_color,
+        line_thickness=5,
+        save_image=open_image,
+        open_image=open_image,
     )
 
-disp = display2(
-    disp,
-    "",
-    points=transform_points(detected_drill_points_mm, obj_to_img_homography),
-    point_size=detected_drill_points[0].size / 2,
-    marker_color=drill_color,
-    save_image=False,
-    open_image=False,
-    line_thickness=5,
-)
-disp = display2(
-    disp,
-    "",
-    points=transform_points(drill_objpoints, obj_to_img_homography),
-    point_size=detected_drill_points[0].size / 2,
-    marker_color=target_color,
-    line_thickness=5,
-    save_image=False,
-    open_image=False,
-)
-_ = display2(
-    disp,
-    "compensated_points",
-    points=transform_points(detected_laser_points_mm, obj_to_img_homography),
-    point_size=detected_drill_points[0].size / 2,
-    marker_color=laser_color,
-    line_thickness=5,
-)
+    return disp
 
-# display(disp)
-
+display_compensation(image, open_image=True)
 
 # %%
 canvas = create_svg_grid(
@@ -705,30 +719,17 @@ canvas = create_svg_grid(
     laser_radius,
 )
 
-counter += 1
-with (build_dir / f"compensated_dots{counter}.svg").open("w") as f:
+counter = 0
+filename = build_dir / f"compensated_dots{counter}.svg"
+while filename.exists():
+    counter += 1
+    filename = build_dir / f"compensated_dots{counter}.svg"
+
+with filename.open("w") as f:
     f.write(str(canvas))
 
+print(f"Saved to {filename}")
 
-# laser_dots_still_fucked = cv2.cvtColor(
-#     cv2.imdecode(
-#         np.frombuffer(cairosvg.svg2png(url=str(dots_svg), dpi=image_dpi), dtype=np.uint8),
-#         cv2.IMREAD_UNCHANGED
-#     ),
-#     cv2.COLOR_RGBA2BGRA
-# )
-# # display2(laser_dots_still_fucked, "laser_dots_still_fucked")
-
-# # %%
-# # Apply the undistortion
-# laser_dots_unfucked = cv2.remap(
-#     laser_dots_still_fucked,
-#     *maps,
-#     interpolation=cv2.INTER_LINEAR,
-#     borderMode=cv2.BORDER_CONSTANT
-# )
-
-# cv2.imwrite(build_dir / "laser_dots_unfucked.png", laser_dots_unfucked)
 
 # %%
 # Save compensation mappers
@@ -739,75 +740,46 @@ with (my_dir / "compensation_mappers.pkl").open("wb") as f:
 
 
 # %%
-def zip_closest(
-    keypoints1: list[cv2.KeyPoint], keypoints2: list[cv2.KeyPoint]
-) -> Generator[tuple[cv2.KeyPoint, cv2.KeyPoint], None, None]:
-    def _dist(p1: cv2.KeyPoint, p2: cv2.KeyPoint) -> float:
-        return math.sqrt((p1.pt[0] - p2.pt[0])**2 + (p1.pt[1] - p2.pt[1])**2)
-
-    keypoints2 = keypoints2.copy()
-    for kp1 in keypoints1:
-        closest_kp2 = min(keypoints2, key=lambda kp2: _dist(kp1, kp2))
-        yield kp1, closest_kp2
-        keypoints2.remove(closest_kp2)
-
 point_pairs = list(zip_closest(detected_drill_points, detected_laser_points))
 
-plt.scatter(
-    [p[0].pt[0] for p in point_pairs],
-    [p[0].pt[1] for p in point_pairs],
-    color="blue",
-    s=3,
-)
-
-for i, p in enumerate(point_pairs):
-    plt.annotate(
-        f"{i}",
-        xy=(p[0].pt[0], p[0].pt[1]),
-        xytext=(p[0].pt[0] + 1, p[0].pt[1] + 1),
+def scatter_point_pairs(point_pairs: list[tuple[cv2.KeyPoint, cv2.KeyPoint]]):
+    plt.scatter(
+        [p[0].pt[0] for p in point_pairs],
+        [p[0].pt[1] for p in point_pairs],
         color="blue",
+        s=3,
     )
 
-plt.scatter(
-    [p[1].pt[0] for p in point_pairs],
-    [p[1].pt[1] for p in point_pairs],
-    color="red",
-    s=3,
-)
+    for i, p in enumerate(point_pairs):
+        plt.annotate(
+            f"{i}",
+            xy=(p[0].pt[0], p[0].pt[1]),
+            xytext=(p[0].pt[0] + 1, p[0].pt[1] + 1),
+            color="blue",
+        )
 
-for i, p in enumerate(point_pairs):
-    plt.annotate(
-        f"{i}",
-        xy=(p[1].pt[0], p[1].pt[1]),
-        xytext=(p[1].pt[0] + 1, p[1].pt[1] + 1),
+    plt.scatter(
+        [p[1].pt[0] for p in point_pairs],
+        [p[1].pt[1] for p in point_pairs],
         color="red",
+        s=3,
     )
 
-plt.gca().invert_yaxis()
-plt.show()
+    for i, p in enumerate(point_pairs):
+        plt.annotate(
+            f"{i}",
+            xy=(p[1].pt[0], p[1].pt[1]),
+            xytext=(p[1].pt[0] + 1, p[1].pt[1] + 1),
+            color="red",
+        )
 
-# %%
-def plot_error_histogram(point_pairs: list[tuple[cv2.KeyPoint, cv2.KeyPoint]], scale: float):
-    error = np.array([np.array(p1.pt) - np.array(p2.pt) for p1, p2 in point_pairs]) / scale
-    plt.hist2d(
-        error[:, 0],
-        error[:, 1],
-        bins=20,
-        cmap='viridis',
-        density=True
-    )
-    plt.colorbar(label='Density')
-    plt.title("Error in mm")
-    plt.axhline(y=0, color='k', linestyle='--', alpha=0.3)
-    plt.axvline(x=0, color='k', linestyle='--', alpha=0.3)
-    plt.xlabel('X Error (mm)')
-    plt.ylabel('Y Error (mm)')
-    x_range = max(abs(np.min(error[:, 0])), abs(np.max(error[:, 0])))
-    y_range = max(abs(np.min(error[:, 1])), abs(np.max(error[:, 1])))
-
-    plt.axis([-x_range, x_range, -y_range, y_range])
+    plt.gca().invert_yaxis()
     plt.show()
 
+scatter_point_pairs(point_pairs)
+
+# %%
 plot_error_histogram(point_pairs, scan_mm_to_pixels)
 
 # %%
+# Morph and remap SVG and images
