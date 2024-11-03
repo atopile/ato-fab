@@ -983,3 +983,34 @@ both[:, :, 1] = target_image
 display2(both)
 
 # %%
+import dataclasses
+
+@dataclasses.dataclass
+class CompensationPackage:
+    predecessor: str | None
+    description: str
+    compensate_mm_mapper: tuple[Rbf, Rbf]
+    remap_mm_mapper: tuple[Rbf, Rbf]
+    bounds_mm: tuple[tuple[float, float], tuple[float, float]]
+    target_drill_points: np.ndarray
+    detected_drill_points_mm: np.ndarray
+    detected_laser_points_mm: np.ndarray
+
+# %%
+comp_package_1 = CompensationPackage(
+    predecessor=None,
+    description="20241103-Top-Compensation",
+    compensate_mm_mapper=mm_mappers,
+    remap_mm_mapper=mm_remap_mappers,
+    bounds_mm=((0, 0), (input_image_dimensions[0], input_image_dimensions[1])),
+    target_drill_points=drill_objpoints,
+    detected_drill_points_mm=detected_drill_points_mm,
+    detected_laser_points_mm=detected_laser_points_mm,
+)
+
+calibration_dir = my_dir / "calibrations"
+calibration_dir.mkdir(exist_ok=True)
+with (calibration_dir / f"{comp_package_1.description}.pkl").open("wb") as f:
+    pickle.dump(comp_package_1, f)
+
+# %%
