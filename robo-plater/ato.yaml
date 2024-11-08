@@ -18,7 +18,7 @@ dependencies:
   link_broken: false
   path: .ato/modules/generics
 - name: esp32-s3
-  version_spec: '@775b03e7566001d5724b98a5c5d952a887bb550c'
+  version_spec:
   link_broken: false
   path: .ato/modules/esp32-s3
 - name: lv2842xlvddcr
@@ -46,10 +46,10 @@ dependencies:
   link_broken: false
   path: .ato/modules/sk6805-ec20
 - name: nau7802
-  version_spec: '@62f6a4c6bbca2d423eabed6fb5319fcd8ff55f7c'
+  version_spec:
   link_broken: false
   path: .ato/modules/nau7802
 - name: usb-connectors
-  version_spec: '@1be66943895494857495c3afe24389a895b9fac8'
+  version_spec:
   link_broken: false
   path: .ato/modules/usb-connectors
